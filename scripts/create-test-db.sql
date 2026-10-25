@@ -1,0 +1,1 @@
+CREATE DATABASE edge_test;
