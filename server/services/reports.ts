@@ -18,7 +18,7 @@ import type { DbOrTx } from "../db/client.js";
 import { projects } from "../db/schema.js";
 import { type Actor, can, canAccessProject, requirePerm, requireProject } from "../auth/actor.js";
 import { businessToday } from "../lib/dates.js";
-import { dec, m2, q4, sum } from "../lib/decimal.js";
+import { type Decimal, dec, m2, q4, sum } from "../lib/decimal.js";
 import { notFound, rule } from "../lib/errors.js";
 import { myPendingApprovals } from "./approvals.js";
 import { lineFulfilment } from "./materialRequests.js";
@@ -26,6 +26,8 @@ import { listLocations, stockPosition } from "./inventory.js";
 
 const COMMITTED_STATUSES = sql`('approved','partially_received','received','closed')`;
 const NOT_TRACKED = "Not tracked in Phase 1";
+/** Human-readable quantity for messages (no trailing zeros). */
+const qtyText = (v: Decimal.Value) => dec(v).toDecimalPlaces(4).toString();
 
 export type DrillMetric = "committed" | "received" | "issued";
 
@@ -209,7 +211,7 @@ export async function dashboard(db: DbOrTx, actor: Actor) {
       const ff = f.get(l.id)!;
       if (ff.uncovered.gt(0)) {
         actions.push({
-          kind: "mr_uncovered", title: `${l.number} line ${l.line_no}: ${q4(ff.uncovered)} ${l.item_code} not covered`, detail: "Reserve stock or raise a purchase order",
+          kind: "mr_uncovered", title: `${l.number} line ${l.line_no}: ${qtyText(ff.uncovered)} ${l.item_code} not covered`, detail: "Reserve stock or raise a purchase order",
           due: l.required_date, overdue: l.required_date < today, owner: "Procurement / Stores", projectCode: l.project_code, link: `/material-requests/${l.mr_id}`,
         });
       }
@@ -250,9 +252,10 @@ export async function dashboard(db: DbOrTx, actor: Actor) {
     }
   }
 
-  if (can(actor, "stock.view")) {
+  // Reorder alerts go to the people who can act on them (stores / procurement), not to every viewer.
+  if (can(actor, "stock.view") && can(actor, "mr.allocate")) {
     for (const s of (await stockPosition(db, actor, {})).filter((x) => x.belowReorder)) {
-      actions.push({ kind: "low_stock", title: `Low stock: ${s.itemCode} at ${s.locationCode}`, detail: `${s.available} ${s.baseUnit} available, reorder level ${q4(s.reorderLevel ?? 0)}`, due: null, overdue: false, owner: "Stores", projectCode: null, link: `/stock?item=${s.itemId}` });
+      actions.push({ kind: "low_stock", title: `Low stock: ${s.itemCode} at ${s.locationCode}`, detail: `${qtyText(s.available)} ${s.baseUnit} available, reorder level ${qtyText(s.reorderLevel ?? 0)}`, due: null, overdue: false, owner: "Stores", projectCode: null, link: `/stock?item=${s.itemId}` });
     }
   }
 
