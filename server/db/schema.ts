@@ -58,6 +58,8 @@ export const users = pgTable("users", {
   failedLoginCount: integer("failed_login_count").notNull().default(0),
   lockedUntil: ts("locked_until"),
   lastLoginAt: ts("last_login_at"),
+  // Set for accounts created with a temporary password; cleared when the user sets their own (A-40).
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   createdAt: createdAt(),
 }, (t) => [unique("users_email_unique").on(t.email), check("users_email_lower", sql`${t.email} = lower(${t.email})`)]);
 

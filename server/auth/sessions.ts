@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { hash as argonHash, verify as argonVerify } from "@node-rs/argon2";
-import { and, eq, gt, lt } from "drizzle-orm";
+import { and, eq, gt, lt, ne } from "drizzle-orm";
 import type { DB } from "../db/client.js";
 import { sessions, users } from "../db/schema.js";
 
@@ -59,4 +59,24 @@ export async function logout(db: DB, token: string) {
 
 export async function purgeExpiredSessions(db: DB) {
   await db.delete(sessions).where(lt(sessions.expiresAt, new Date()));
+}
+
+/** Password rule (A-40): at least 10 characters, not the email address, and different from the current one. */
+export function passwordProblem(pw: string, email: string): string | null {
+  if (pw.length < 10) return "Use at least 10 characters.";
+  if (pw.length > 200) return "That password is too long.";
+  if (pw.trim().toLowerCase() === email.trim().toLowerCase()) return "Do not use your email address as the password.";
+  return null;
+}
+
+/** Changes the signed-in user's password and signs out their other sessions. */
+export async function changePassword(db: DB, userId: string, currentToken: string, current: string, next: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const [u] = await db.select().from(users).where(eq(users.id, userId));
+  if (!u || !(await verifyPassword(u.passwordHash, current))) return { ok: false, message: "Your current password is not correct." };
+  const problem = passwordProblem(next, u.email);
+  if (problem) return { ok: false, message: problem };
+  if (await verifyPassword(u.passwordHash, next)) return { ok: false, message: "Choose a password different from the current one." };
+  await db.update(users).set({ passwordHash: await hashPassword(next), mustChangePassword: false }).where(eq(users.id, userId));
+  await db.delete(sessions).where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, sha256(currentToken))));
+  return { ok: true };
 }

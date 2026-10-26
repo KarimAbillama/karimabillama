@@ -29,6 +29,9 @@ project report, plus transfers, reservations, stock card, action dashboard, CSV 
 
 **Slice 3: RFIs and drawing register** ✅ built and tested (scenarios 7 and 9)
 
+**Deployment on EDGE's Windows Server** ✅ installer, Windows service, HTTPS, nightly backups, restore test,
+CSV import of EDGE's own data, temporary passwords with forced change
+
 Next slices, in proposed order (reordered after EDGE's answers):
 
 0. **Money**: client payment applications and certificates, retention, variations (pending vs approved),

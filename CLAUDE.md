@@ -25,6 +25,7 @@ This repo is EDGE SCM's construction CRM/ERP. Read `docs/PRODUCT_BRIEF.md` (the 
 - `npm run typecheck`, `npm run build`, `npm run test:e2e`
 - `TEST_DATABASE_URL=pglite npm test`: the same tests on embedded PGlite (no server)
 - `npm run build:offline`: Windows offline demo zip (`server/offline.ts`, `scripts/build-offline.ts`)
+- `npm run build:server`: Windows Server package (`deploy/windows/`, `scripts/build-windows-server.ts`, `server/cli.ts`)
 - `npm run build:preview`: one-page clickable preview (`preview/`). Its mock API is for demos only; keep it
   in step with screen changes, but never treat it as the business logic.
 - Schema change: edit `server/db/schema.ts`, then `npm run db:generate`, then review the SQL.

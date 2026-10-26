@@ -13,6 +13,7 @@ export interface Actor {
   permissions: Set<string>;
   allProjects: boolean;
   projectIds: string[];
+  mustChangePassword: boolean;
   ip?: string;
 }
 
@@ -36,6 +37,7 @@ export async function loadActor(db: DbOrTx, userId: string): Promise<Actor | nul
     permissions: new Set(perms.map((p) => p.p)),
     allProjects: rs.some((r) => r.allProjects),
     projectIds: memberships.map((m) => m.projectId),
+    mustChangePassword: u.mustChangePassword,
   };
 }
 

@@ -29,6 +29,13 @@
       "when": 1793016238332,
       "tag": "0003_rfis_drawings",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793016998696,
+      "tag": "0004_must_change_password",
+      "breakpoints": true
     }
   ]
 }

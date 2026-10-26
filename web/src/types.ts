@@ -1,4 +1,4 @@
-export interface Me { userId: string; email: string; fullName: string; roles: string[]; permissions: string[]; allProjects: boolean }
+export interface Me { userId: string; email: string; fullName: string; roles: string[]; permissions: string[]; allProjects: boolean; mustChangePassword?: boolean }
 export interface ProjectRef { id: string; code: string; name: string; status: string }
 export interface SiteRef { id: string; projectId: string; code: string; name: string }
 export interface LocationRef { id: string; code: string; name: string; type: "warehouse" | "site_store" | "transit"; projectId: string | null; projectCode: string | null }

@@ -8,9 +8,10 @@ import fastifyStatic from "@fastify/static";
 import { ZodError } from "zod";
 import type { DB } from "./db/client.js";
 import { type Actor, loadActor } from "./auth/actor.js";
-import { login, logout, resolveSession } from "./auth/sessions.js";
+import { changePassword, login, logout, resolveSession } from "./auth/sessions.js";
 import { AppError, pgCode } from "./lib/errors.js";
 import { registerRoutes } from "./routes.js";
+import { audit } from "./lib/audit.js";
 
 export interface AppConfig {
   sessionTtlHours: number;
@@ -19,6 +20,8 @@ export interface AppConfig {
   serveWeb?: boolean;
   /** Folder with the built web app (default: dist/web). */
   webDir?: string;
+  /** Serve HTTPS directly (Windows Server install) instead of behind a proxy. */
+  https?: { pfx?: Buffer; passphrase?: string; cert?: Buffer; key?: Buffer };
   /** Login attempts allowed per IP per minute (default 10). */
   loginRateLimit?: number;
 }
@@ -34,6 +37,7 @@ export const CSRF_HEADER = "x-edge-csrf";
 
 export async function buildApp(db: DB, config: AppConfig) {
   const app = Fastify({
+    ...(config.https ? { https: config.https } : {}),
     logger: config.logger ? { redact: ["req.headers.cookie", "req.headers.authorization", "res.headers['set-cookie']"] } : false,
     bodyLimit: 1_000_000,
     trustProxy: true,
@@ -57,6 +61,11 @@ export async function buildApp(db: DB, config: AppConfig) {
     if (!actor) return reply.code(401).send({ error: { code: "UNAUTHENTICATED", message: "Please sign in" } });
     actor.ip = req.ip;
     req.actor = actor;
+    // Accounts on a temporary password can only change it (or sign out) until they do.
+    const path = req.url.split("?")[0];
+    if (actor.mustChangePassword && !["/api/auth/me", "/api/auth/password", "/api/auth/logout"].includes(path)) {
+      return reply.code(403).send({ error: { code: "PASSWORD_CHANGE_REQUIRED", message: "Set your own password first." } });
+    }
   });
 
   app.setErrorHandler((err, req, reply) => {
@@ -99,6 +108,15 @@ export async function buildApp(db: DB, config: AppConfig) {
 
   app.get("/api/auth/me", async (req) => meResponse(req.actor!));
 
+  app.post("/api/auth/password", { config: { rateLimit: { max: config.loginRateLimit ?? 10, timeWindow: "1 minute" } } }, async (req, reply) => {
+    const body = (req.body ?? {}) as { currentPassword?: string; newPassword?: string };
+    if (!body.currentPassword || !body.newPassword) return reply.code(400).send({ error: { code: "VALIDATION", message: "Enter your current and new password." } });
+    const res = await changePassword(db, req.actor!.userId, req.cookies[SESSION_COOKIE]!, body.currentPassword, body.newPassword);
+    if (!res.ok) return reply.code(422).send({ error: { code: "PASSWORD", message: res.message } });
+    await audit(db, req.actor!, "auth.password_changed", "user", req.actor!.userId, null);
+    return { ok: true };
+  });
+
   await registerRoutes(app, db);
 
   if (config.serveWeb) {
@@ -115,5 +133,5 @@ export async function buildApp(db: DB, config: AppConfig) {
 }
 
 function meResponse(a: Actor) {
-  return { userId: a.userId, email: a.email, fullName: a.fullName, roles: a.roleKeys, permissions: [...a.permissions].sort(), allProjects: a.allProjects };
+  return { userId: a.userId, email: a.email, fullName: a.fullName, roles: a.roleKeys, permissions: [...a.permissions].sort(), allProjects: a.allProjects, mustChangePassword: a.mustChangePassword };
 }

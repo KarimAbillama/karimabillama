@@ -1,0 +1,5 @@
+code,name,type,trn,phone,email,payment_terms
+CL-001,Example Client Developments LLC,client,,,,
+CN-001,Example Engineering Consultants,consultant,,,,
+SUP-001,Example Building Materials Trading,supplier,100000000000009,+971 4 000 0000,sales@example.ae,30 days from invoice
+SC-001,Example Electromechanical LLC,subcontractor|supplier,,,,

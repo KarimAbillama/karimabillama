@@ -16,5 +16,5 @@
     "noEmit": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["server", "web/src", "preview", "tests", "e2e", "scripts/build-offline.ts", "scripts/build-preview.ts", "vite.config.ts", "vitest.config.ts", "drizzle.config.ts"]
+  "include": ["server", "web/src", "preview", "tests", "e2e", "scripts/build-offline.ts", "scripts/build-preview.ts", "scripts/build-windows-server.ts", "vite.config.ts", "vitest.config.ts", "drizzle.config.ts"]
 }

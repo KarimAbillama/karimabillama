@@ -1,0 +1,5 @@
+project_code,code,label,meaning
+P-2601,A,Approved,approved
+P-2601,B,Approved as noted,approved_as_noted
+P-2601,C,Revise and resubmit,revise_resubmit
+P-2601,D,Rejected,rejected

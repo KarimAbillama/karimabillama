@@ -1,0 +1,4 @@
+code,description,category,base_unit,purchase_unit,reorder_level,conversions
+BLK-200,Hollow concrete block 200 mm,Masonry,pcs,pallet,500,pallet=90
+CEM-50,Cement OPC 50 kg bag,Cement,bag,bag,100,
+TIL-600,Porcelain tile 600x600,Tiles,m2,box,40,box=1.44

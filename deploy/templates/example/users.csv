@@ -1,0 +1,5 @@
+email,full_name,job_title,roles,projects,active
+owner@example.ae,Example Owner,Managing Director,director,,yes
+pm1@example.ae,Example Project Manager,Project Manager,project_manager,P-2601,yes
+se1@example.ae,Example Site Engineer,Site Engineer,site_engineer,P-2601,yes
+dc@example.ae,Example Document Controller,Document Controller,document_controller,P-2601,yes

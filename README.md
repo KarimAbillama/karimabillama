@@ -159,15 +159,21 @@ The restore check confirms the following:
 
 Agree recovery targets and schedule automated backups before any production use.
 
-## Deploying (outline, pending the hosting decision)
+## Installing on EDGE's own Windows Server
 
-1. Create a managed PostgreSQL 16 database with automated backups.
-2. Set the environment variables from `.env.example`. Use `COOKIE_SECURE=true`, and leave out or
-   set `ALLOW_DEMO_SEED=false`.
-3. `npm ci && npm run build && npm run db:migrate && npm start`. The server serves the web app
-   and API on `PORT`.
-4. Put it behind an HTTPS reverse proxy. Never expose it over plain HTTP.
-5. Create real users with an import script (admin screens are the next slice).
+`npm run build:server` creates `dist/EDGE-SCM-Server-Windows.zip`. It contains Node.js, the app,
+a Windows service wrapper, the installer and backup scripts, and CSV templates for loading EDGE's
+own data. Full steps for IT are in `deploy/windows/README-SERVER.txt`. In short:
+
+1. Install PostgreSQL 16 for Windows, unzip the package to `C:\EDGE-SCM`.
+2. Run `install.ps1` as administrator: creates the database, HTTPS certificate (company .pfx or
+   self-signed for testing), the "EDGE SCM" Windows service, the firewall rule and a nightly backup.
+3. `edge.cmd create-admin`, then fill the templates and `edge.cmd import templates`.
+4. Staff sign in with a temporary password and must choose their own.
+
+Access from sites: through the office VPN (recommended until two-step sign-in exists). Nothing is
+sent to any outside cloud service. `npm run build:server -- linux` builds the same program for
+testing on Linux.
 
 ## Changing the database
 

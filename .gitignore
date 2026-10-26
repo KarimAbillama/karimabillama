@@ -9,3 +9,6 @@ test-results/
 backups/
 storage/
 .DS_Store
+
+# Temporary passwords written by "edge import" (give out, then delete)
+temporary-passwords-*.csv

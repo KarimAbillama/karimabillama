@@ -22,7 +22,8 @@
     "test:watch": "vitest",
     "test:e2e": "tsx --env-file-if-exists=.env e2e/run.ts",
     "build:offline": "tsx scripts/build-offline.ts",
-    "build:preview": "tsx scripts/build-preview.ts"
+    "build:preview": "tsx scripts/build-preview.ts",
+    "build:server": "tsx scripts/build-windows-server.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8",

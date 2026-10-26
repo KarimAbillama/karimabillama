@@ -16,6 +16,7 @@ import { SubmittalDetail, SubmittalForm, SubmittalList } from "./pages/Submittal
 import { SiteReportDetail, SiteReportForm, SiteReportList } from "./pages/SiteReports";
 import { RfiDetail, RfiForm, RfiList } from "./pages/Rfis";
 import { DrawingDetail, DrawingForm, DrawingList } from "./pages/Drawings";
+import { ChangePassword } from "./pages/Account";
 
 /** Owners and managers who look across all projects start on the overview. */
 const OVERVIEW_FIRST = ["director", "operations_manager", "management_viewer"];
@@ -37,7 +38,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!me) return;
+    if (!me || me.mustChangePassword) return;
     get<Reference>("/api/reference").then((r) => {
       setRef(r);
       // drop a remembered project the user can no longer see
@@ -53,6 +54,14 @@ export function App() {
 
   if (me === undefined) return <Loading />;
   if (me === null) return <Login onLogin={setMe} />;
+  if (me.mustChangePassword) {
+    return (
+      <div className="forced">
+        <ChangePassword forced onDone={() => get<Me>("/api/auth/me").then(setMe)} />
+        <div className="page"><button className="linklike" onClick={async () => { await post("/api/auth/logout"); setMe(null); }}>Sign out</button></div>
+      </div>
+    );
+  }
   if (!ref) return <Loading what="Loading reference data" />;
 
   const ctx = { me, ref, projectId, setProjectId, can: (p: string) => me.permissions.includes(p) };
@@ -96,6 +105,7 @@ export function App() {
           <Route path="/approvals" element={<ApprovalsInbox />} />
           <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/admin/audit" element={<AuditLog />} />
+          <Route path="/account" element={<ChangePassword />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Shell>
@@ -136,7 +146,7 @@ function Shell({ children, onLogout }: { children: React.ReactNode; onLogout: ()
           {ref.projects.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
         </select>
         <div className="user">
-          <span className="user-name">{me.fullName}</span>
+          <NavLink className="user-name" to="/account" title="My account">{me.fullName}</NavLink>
           <button className="btn secondary small" onClick={async () => { await post("/api/auth/logout"); onLogout(); navigate("/"); }}>Sign out</button>
         </div>
       </header>
