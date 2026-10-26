@@ -51,7 +51,20 @@ Screenshots from the automated browser test are in `docs/screenshots/`.
 | `docs/THIRD_PARTY.md` | Licences and running-cost assumptions |
 | `docs/PRODUCT_BRIEF.md` | The original product brief |
 
-## Run it on your computer
+## Offline demo for Windows (no installs)
+
+`npm run build:offline` creates `dist/EDGE-SCM-Offline-Windows.zip`. The zip contains Node.js,
+the app and an embedded PostgreSQL database (PGlite, compiled to WebAssembly). To use it:
+
+1. Unzip it.
+2. Double-click **Start EDGE SCM**. The browser opens at <http://localhost:5173>.
+
+It loads the synthetic demo data and only listens on that computer. Your changes are kept in the
+`data` folder next to it; delete the folder to start again. It is a demo only: no backups, no
+HTTPS, not for real EDGE data. `npm run build:offline -- linux` builds the same package for Linux
+(using the system `node`) for testing.
+
+## Run it on your computer (developer setup)
 
 You need **Node.js 22** and **Docker Desktop**, or any PostgreSQL 16 server.
 
@@ -93,6 +106,7 @@ To start the database again from scratch (development only): `npm run db:reset`.
 
 ```bash
 npm test             # integration tests on a throwaway database (TEST_DATABASE_URL, name must contain "test")
+TEST_DATABASE_URL=pglite npm test   # same tests on an in-memory embedded database, no server needed
 npm run build        # type-check and build the web app
 npx playwright install chromium   # once per machine
 npm run test:e2e     # full browser journey on desktop and phone sizes; writes docs/screenshots/

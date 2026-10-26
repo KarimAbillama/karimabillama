@@ -17,6 +17,8 @@ export interface AppConfig {
   cookieSecure: boolean;
   logger?: boolean;
   serveWeb?: boolean;
+  /** Folder with the built web app (default: dist/web). */
+  webDir?: string;
   /** Login attempts allowed per IP per minute (default 10). */
   loginRateLimit?: number;
 }
@@ -100,7 +102,7 @@ export async function buildApp(db: DB, config: AppConfig) {
   await registerRoutes(app, db);
 
   if (config.serveWeb) {
-    const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/web");
+    const webDir = config.webDir ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/web");
     if (existsSync(webDir)) {
       await app.register(fastifyStatic, { root: webDir, wildcard: false });
       app.setNotFoundHandler((req: FastifyRequest, reply: FastifyReply) => {

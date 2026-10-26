@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { eq, sql } from "drizzle-orm";
 import { createDb, type DB } from "../server/db/client.js";
-import { runMigrations } from "../server/db/migrate.js";
+import { migrationsFolder, runMigrations } from "../server/db/migrate.js";
+import { createPgliteDb, runPgliteMigrations } from "../server/db/pglite.js";
 import { baseSeed } from "../server/db/baseSeed.js";
 import { companies, costCodes, itemUnitConversions, items, locations, projectMembers, projects, roles, sites, userRoles, users } from "../server/db/schema.js";
 import { hashPassword } from "../server/auth/sessions.js";
@@ -21,6 +22,13 @@ function testUrl() {
 /** Wipes the TEST database, applies migrations and reference data. Never point this at real data. */
 export async function freshDb(): Promise<DB> {
   const url = testUrl();
+  if (url === "pglite") {
+    // In-memory embedded database: no server needed, nothing to wipe.
+    const db = await createPgliteDb();
+    await runPgliteMigrations(db, migrationsFolder);
+    await baseSeed(db, "Test Org");
+    return db;
+  }
   if (!/test/i.test(url)) throw new Error(`Refusing to wipe a database whose URL does not contain "test": ${url}`);
   const db = createDb(url, 12);
   await db.execute(sql`drop schema if exists drizzle cascade`);

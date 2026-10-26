@@ -23,6 +23,8 @@ This repo is EDGE SCM's construction CRM/ERP. Read `docs/PRODUCT_BRIEF.md` (the 
 
 - `npm test`: integration tests. Needs `TEST_DATABASE_URL` with "test" in the name; it is wiped.
 - `npm run typecheck`, `npm run build`, `npm run test:e2e`
+- `TEST_DATABASE_URL=pglite npm test`: the same tests on embedded PGlite (no server)
+- `npm run build:offline`: Windows offline demo zip (`server/offline.ts`, `scripts/build-offline.ts`)
 - Schema change: edit `server/db/schema.ts`, then `npm run db:generate`, then review the SQL.
 - Permission matrix doc: `npx tsx scripts/permission-matrix.ts`
 
