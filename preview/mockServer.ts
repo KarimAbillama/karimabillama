@@ -56,7 +56,10 @@ interface Reservation { id: string; mrLineId: string; locationId: string; itemId
 interface Movement { seq: number; date: string; type: string; itemId: string; locationId: string; status: string; qty: Num; sourceType: string; sourceId: string; sourceNumber: string; projectId: string | null; costCodeId: string | null; postedBy: string; note: string | null; unitCost: Num | null; value: Num | null }
 interface Transfer { id: string; number: string; fromId: string; toId: string; status: string; dispatchDate: string; receivedDate: string | null; vehicleRef: string | null; notes: string | null; dispatchedBy: string; idem: string; lines: { id: string; itemId: string; qty: Num; mrLineId: string | null; received: Num | null; short: Num | null; discStatus: string; note: string | null }[] }
 interface Issue { id: string; number: string; idem: string }
-interface Project { id: string; code: string; name: string; status: string; contractValue: Num; clientName: string; startDate: string; plannedEndDate: string; consultantId: string | null; reviewDays: number }
+interface Project { id: string; code: string; name: string; status: string; contractValue: Num; clientName: string; startDate: string; plannedEndDate: string; consultantId: string | null; reviewDays: number; rfiDays?: number }
+interface Drawing { id: string; projectId: string; number: string; title: string; discipline: string; createdBy: string }
+interface DRev { id: string; drawingId: string; revision: string; issueDate: string; purpose: string; transmittalRef: string | null; fileRef: string | null; distribution: string | null; notes: string | null; recordedBy: string; recordedAt: string; seq: number }
+interface Rfi { id: string; number: string; projectId: string; discipline: string; subject: string; question: string; location: string | null; drawingRevisionId: string | null; boqRef: string | null; blockedActivity: string | null; originatorId: string; originatorCompanyId: string | null; assigneeId: string | null; recipientCompanyId: string | null; priority: string; costImpact: string; timeImpact: string; status: string; round: number; issueDate: string | null; responseDueDate: string | null; transmittalRef: string | null; closedDate: string | null; closureNote: string | null; version: number; createdAt: string }
 interface Partner { id: string; name: string; isSubcontractor: boolean; isConsultant: boolean }
 interface SubCode { id: string; projectId: string; code: string; label: string; outcome: string; sortOrder: number }
 interface Submittal { id: string; number: string; projectId: string; type: string; title: string; discipline: string; specSection: string | null; area: string | null; subcontractorId: string | null; consultantId: string | null; requiredBy: string | null; status: string; currentRevision: number; version: number; createdBy: string; createdAt: string; itemIds: string[] }
@@ -74,6 +77,8 @@ const db = {
   movements: [] as Movement[], balances: new Map<string, Num>(), valuations: new Map<string, { avg: Num; qty: Num }>(),
   transfers: [] as Transfer[], issues: [] as Issue[], audit: [] as Audit[],
   partners: [] as Partner[], codes: [] as SubCode[], submittals: [] as Submittal[], revisions: [] as SubRev[], siteReports: [] as SiteReport[], progress: [] as Progress[],
+  drawings: [] as Drawing[], dRevs: [] as DRev[], rfis: [] as Rfi[], rfiResponses: [] as { id: string; rfiId: string; round: number; responseDate: string; responderName: string | null; reference: string | null; response: string; recordedBy: string; recordedAt: string }[],
+  rfiEvents: [] as { id: number; rfiId: string; fromStatus: string | null; toStatus: string; note: string | null; userId: string; at: string }[],
 };
 let session: string | null = null;
 
@@ -628,6 +633,13 @@ function dashboard(a: Actor) {
     if (st.overdue) actions.push({ kind: "submittal_overdue", title: `${s.number} overdue with the consultant (${st.daysOverdue} days)`, detail: `${s.title} · chase the consultant`, due: st.dueDate, overdue: true, owner: "Document controller", projectCode: project(s.projectId).code, link: `/submittals/${s.id}` });
     else if (st.ballInCourt === "edge") actions.push({ kind: "submittal_resubmit", title: `Resubmit ${s.number}`, detail: `${s.title} · returned ${s.status === "rejected" ? "rejected" : "for revision"}`, due: s.requiredBy, overdue: st.lateForSite, owner: "Document controller", projectCode: project(s.projectId).code, link: `/submittals/${s.id}` });
   }
+  if (can(a, "rfi.view")) for (const r of db.rfis.filter((x) => ["internal_review", "returned", "issued", "responded"].includes(x.status) && inScope(a, x.projectId))) {
+    const issuer = can(a, "rfi.issue"), mine = r.assigneeId === a.user.id || r.originatorId === a.user.id, st = rfiState(r, t), link = `/rfis/${r.id}`, code = project(r.projectId).code;
+    if (st.overdue && (issuer || mine)) actions.push({ kind: "rfi_overdue", title: `${r.number} overdue with the consultant (${st.daysOverdue} days)`, detail: `${r.subject}${r.blockedActivity ? ` · blocks: ${r.blockedActivity}` : ""}`, due: r.responseDueDate, overdue: true, owner: "Consultant (chase)", projectCode: code, link });
+    else if (r.status === "responded" && (issuer || mine)) actions.push({ kind: "rfi_answered", title: `${r.number} answered: act on it and close`, detail: r.subject, due: null, overdue: false, owner: "You", projectCode: code, link });
+    else if (r.status === "internal_review" && issuer) actions.push({ kind: "rfi_review", title: `Review ${r.number} before it goes to the consultant`, detail: r.subject, due: null, overdue: false, owner: "You", projectCode: code, link });
+    else if (r.status === "returned" && r.originatorId === a.user.id) actions.push({ kind: "rfi_returned", title: `${r.number} returned to you for changes`, detail: r.subject, due: null, overdue: false, owner: "You", projectCode: code, link });
+  }
   const reportDay = lastWorkday(t);
   if (can(a, "sitereport.create") && !a.all) for (const p of db.projects.filter((x) => a.user.projects.includes(x.id) && x.status === "active")) {
     if (!db.siteReports.some((r) => r.projectId === p.id && r.reportDate === reportDay && ["submitted", "reviewed"].includes(r.status)))
@@ -807,6 +819,16 @@ function overview(a: Actor) {
       if (toResubmit.length) attention.push(`${toResubmit.length} submittal(s) to revise and resubmit`);
       if (late.length) attention.push(`${late.length} submittal(s) not approved by the date site needs them`);
     }
+    let rfis = null; let rfiRag: Rag = "none";
+    if (can(a, "rfi.view")) {
+      const mine = db.rfis.filter((r) => r.projectId === p.id && RFI_OPEN.includes(r.status)).map((r) => ({ r, st: rfiState(r, t) }));
+      const withC = mine.filter((x) => x.st.ballInCourt === "consultant"), overdue = withC.filter((x) => x.st.overdue), maxOver = Math.max(0, ...overdue.map((x) => x.st.daysOverdue));
+      const blocking = overdue.filter((x) => x.r.blockedActivity), toClose = mine.filter((x) => x.r.status === "responded").length;
+      rfiRag = !mine.length ? "green" : maxOver > 7 || blocking.length ? "red" : overdue.length ? "amber" : "green";
+      rfis = { open: mine.length, withConsultant: withC.length, overdue: overdue.length, maxOverdueDays: maxOver, blocking: blocking.length, toClose, rag: rfiRag };
+      if (overdue.length) attention.push(`${overdue.length} RFI(s) overdue with the consultant (worst ${maxOver} days)${blocking.length ? `, ${blocking.length} holding up site work` : ""}`);
+      if (toClose) attention.push(`${toClose} answered RFI(s) to act on and close`);
+    }
     const pr = db.siteReports.filter((r) => r.projectId === p.id && r.reportDate >= since && ["submitted", "reviewed"].includes(r.status)).sort((x, y) => y.reportDate.localeCompare(x.reportDate));
     const lastDate = pr[0]?.reportDate ?? null;
     const missing = lastDate ? workdaysBetween(lastDate, expected) : workdaysBetween(since, expected);
@@ -827,7 +849,7 @@ function overview(a: Actor) {
     if (uncoveredSoon) attention.push(`${uncoveredSoon} material request line(s) needed within 3 days and not covered`);
     const money = can(a, "cost.view") ? { contractValue: m2(p.contractValue), committed: m2(sum(drillRows(p.id, "committed").map((r) => r.value))), issuedCost: m2(sum(drillRows(p.id, "issued").map((r) => r.value))), notTracked: ["certified", "paid", "variations", "retention"] } : null;
     return { project: { id: p.id, code: p.code, name: p.name, status: p.status, clientName: p.clientName, startDate: p.startDate, plannedEndDate: p.plannedEndDate },
-      overall: worstRag(progRag, apprRag, siteRag, safetyRag, supplyRag), programme, approvals,
+      overall: worstRag(progRag, apprRag, rfiRag, siteRag, safetyRag, supplyRag), programme, approvals, rfis,
       site: { lastReportDate: lastDate, missingWorkdays: missing, headcount, delayDays: delays.length, delayCauses: causes, rag: siteRag },
       safety: { incidents, rag: safetyRag }, supply: { lateDeliveries: latePos.length, worstLateDays: worstLate, uncoveredSoon, rag: supplyRag }, money, attention };
   });
@@ -835,7 +857,116 @@ function overview(a: Actor) {
   rows.sort((x, y) => rank[x.overall] - rank[y.overall] || x.project.code.localeCompare(y.project.code));
   return { today: t, expectedReportDay: expected, totals: { projects: rows.length, red: rows.filter((r) => r.overall === "red").length, amber: rows.filter((r) => r.overall === "amber").length,
     headcount: rows.reduce((x, r) => x + r.site.headcount, 0), submittalsWithConsultant: rows.reduce((x, r) => x + (r.approvals?.withConsultant ?? 0), 0),
-    submittalsOverdue: rows.reduce((x, r) => x + (r.approvals?.overdue ?? 0), 0), myApprovals: myPending(a).length }, projects: rows };
+    submittalsOverdue: rows.reduce((x, r) => x + (r.approvals?.overdue ?? 0), 0), rfisWithConsultant: rows.reduce((x, r) => x + (r.rfis?.withConsultant ?? 0), 0),
+    rfisOverdue: rows.reduce((x, r) => x + (r.rfis?.overdue ?? 0), 0), myApprovals: myPending(a).length }, projects: rows };
+}
+
+
+// ───────────── drawings & RFIs ─────────────
+let revSeq = 0;
+function revStates(drawingId: string) {
+  const sorted = db.dRevs.filter((r) => r.drawingId === drawingId).sort((a, b) => b.issueDate.localeCompare(a.issueDate) || b.seq - a.seq);
+  const cc = sorted.find((r) => r.purpose === "for_construction");
+  return sorted.map((r, i) => ({ ...r, state: r.id === cc?.id ? "current_construction" : i === 0 ? "latest" : "superseded" }));
+}
+type RevIn = { revision: string; issueDate: string; purpose: string; transmittalRef?: string | null; fileRef?: string | null; distribution?: string | null; notes?: string | null };
+function addRev(a: Actor, drawingId: string, r: RevIn) {
+  need(a, "drawing.manage");
+  const d = byId(db.drawings, drawingId, "Drawing"); needProject(a, d.projectId, "Drawing");
+  if (!r.revision?.trim()) throw rule("REVISION_REQUIRED", "Enter the revision (e.g. C03).");
+  if (r.issueDate > today()) throw rule("FUTURE_DATE", "The issue date cannot be in the future.");
+  if (db.dRevs.some((x) => x.drawingId === drawingId && x.revision === r.revision.trim())) throw rule("REVISION_EXISTS", `Revision ${r.revision} of ${d.number} is already recorded.`);
+  const rev: DRev = { id: newId("drev"), drawingId, revision: r.revision.trim(), issueDate: r.issueDate, purpose: r.purpose, transmittalRef: r.transmittalRef || null, fileRef: r.fileRef || null,
+    distribution: r.distribution || null, notes: r.notes || null, recordedBy: a.user.id, recordedAt: nowIso(), seq: ++revSeq };
+  db.dRevs.push(rev);
+  audit(a, "drawing.revised", "drawing", drawingId, d.projectId, { number: d.number, revision: rev.revision });
+  return rev;
+}
+function createDrawing(a: Actor, b: { projectId: string; number: string; title: string; discipline: string; firstRevision: RevIn }) {
+  need(a, "drawing.manage"); needProject(a, b.projectId, "Project");
+  if (!b.number?.trim() || !b.title?.trim()) throw rule("REQUIRED", "Enter the drawing number and title.");
+  if (db.drawings.some((d) => d.projectId === b.projectId && d.number === b.number.trim())) throw rule("DRAWING_EXISTS", "This drawing number is already in the register for this project. Add a revision to it instead.");
+  const d: Drawing = { id: newId("dwg"), projectId: b.projectId, number: b.number.trim(), title: b.title.trim(), discipline: b.discipline, createdBy: a.user.id };
+  db.drawings.push(d);
+  addRev(a, d.id, b.firstRevision);
+  return d;
+}
+function revInfo(revId: string | null) {
+  if (!revId) return null;
+  const r = db.dRevs.find((x) => x.id === revId); if (!r) return null;
+  const d = db.drawings.find((x) => x.id === r.drawingId)!;
+  const st = revStates(d.id), me = st.find((x) => x.id === revId)!, cc = st.find((x) => x.state === "current_construction");
+  return { drawingId: d.id, number: d.number, title: d.title, projectId: d.projectId, revision: r.revision, purpose: r.purpose, state: me.state, latestRevision: st[0].revision, constructionRevision: cc?.revision ?? null };
+}
+const supersededWarning = (i: ReturnType<typeof revInfo>) => (i && i.state === "superseded" ? `${i.number} revision ${i.revision} is superseded. Current: ${i.constructionRevision ?? i.latestRevision}${i.constructionRevision ? " (for construction)" : ""}.` : null);
+
+const RFI_OPEN = ["draft", "internal_review", "returned", "issued", "responded"];
+let rfiEventSeq = 0;
+function rfiMove(a: Actor, r: Rfi, to: string, set: Partial<Rfi> = {}, note: string | null = null) {
+  db.rfiEvents.push({ id: ++rfiEventSeq, rfiId: r.id, fromStatus: r.status, toStatus: to, note, userId: a.user.id, at: nowIso() });
+  Object.assign(r, set, { status: to, version: r.version + 1 });
+  audit(a, `rfi.${to}`, "rfi", r.id, r.projectId, { number: r.number, note });
+}
+function rfiState(r: Rfi, t = today()) {
+  const ball = r.status === "issued" ? "consultant" : RFI_OPEN.includes(r.status) ? "edge" : null;
+  const daysOverdue = r.status === "issued" && r.responseDueDate ? Math.max(0, daysBetween(r.responseDueDate, t)) : 0;
+  return { ballInCourt: ball, daysOpen: r.issueDate && RFI_OPEN.includes(r.status) ? daysBetween(r.issueDate, t) : null, daysOverdue, overdue: daysOverdue > 0 };
+}
+type RfiIn = { projectId: string; discipline: string; subject: string; question: string; location?: string | null; drawingRevisionId?: string | null; boqRef?: string | null; blockedActivity?: string | null;
+  originatorCompanyId?: string | null; assigneeId?: string | null; recipientCompanyId?: string | null; priority?: string; costImpact?: string; timeImpact?: string; responseDueDate?: string | null };
+function rfiFields(b: Omit<RfiIn, "projectId">, projectId: string) {
+  if (!b.subject?.trim() || !b.question?.trim()) throw rule("REQUIRED", "Enter the subject and the question.");
+  const info = revInfo(b.drawingRevisionId ?? null);
+  if (b.drawingRevisionId && (!info || info.projectId !== projectId)) throw rule("INVALID_DRAWING", "The drawing revision does not belong to this project.");
+  return { fields: { discipline: b.discipline, subject: b.subject.trim(), question: b.question.trim(), location: b.location || null, drawingRevisionId: b.drawingRevisionId || null, boqRef: b.boqRef || null,
+    blockedActivity: b.blockedActivity || null, originatorCompanyId: b.originatorCompanyId || null, priority: b.priority || "normal", costImpact: b.costImpact || "none", timeImpact: b.timeImpact || "none",
+    responseDueDate: b.responseDueDate || null }, warning: supersededWarning(info) };
+}
+function createRfi(a: Actor, b: RfiIn) {
+  need(a, "rfi.create"); needProject(a, b.projectId, "Project");
+  const { fields, warning } = rfiFields(b, b.projectId);
+  const r: Rfi = { id: newId("rfi"), number: nextNumber("RFI"), projectId: b.projectId, ...fields, originatorId: a.user.id, assigneeId: b.assigneeId || a.user.id,
+    recipientCompanyId: b.recipientCompanyId || project(b.projectId).consultantId, status: "draft", round: 0, issueDate: null, transmittalRef: null, closedDate: null, closureNote: null, version: 1, createdAt: nowIso() };
+  db.rfis.push(r);
+  db.rfiEvents.push({ id: ++rfiEventSeq, rfiId: r.id, fromStatus: null, toStatus: "draft", note: null, userId: a.user.id, at: nowIso() });
+  audit(a, "rfi.created", "rfi", r.id, r.projectId, { number: r.number, subject: r.subject });
+  return { ...r, warnings: warning ? [warning] : [] };
+}
+const getRfiRec = (a: Actor, id: string) => { need(a, "rfi.view"); const r = byId(db.rfis, id, "RFI"); needProject(a, r.projectId, "RFI"); return r; };
+function sendRfiForReview(a: Actor, id: string) { need(a, "rfi.create"); const r = getRfiRec(a, id); if (!["draft", "returned"].includes(r.status)) throw rule("INVALID_STATE", "Only a draft or returned RFI can be sent for review."); rfiMove(a, r, "internal_review"); }
+function issueRfi(a: Actor, id: string, b: { issueDate: string; transmittalRef?: string | null; responseDueDate?: string | null; note?: string | null }) {
+  need(a, "rfi.issue");
+  const r = getRfiRec(a, id), reissue = r.status === "responded";
+  if (!["draft", "internal_review", "responded"].includes(r.status)) throw rule("INVALID_STATE", "This RFI cannot be issued now.");
+  if (reissue && !b.note?.trim()) throw rule("NOTE_REQUIRED", "Say why the answer is not enough before issuing again.");
+  if (b.issueDate > today()) throw rule("FUTURE_DATE", "The issue date cannot be in the future.");
+  const due = b.responseDueDate || (reissue ? null : r.responseDueDate) || addDays(b.issueDate, project(r.projectId).rfiDays ?? 7);
+  rfiMove(a, r, "issued", { issueDate: b.issueDate, responseDueDate: due, transmittalRef: b.transmittalRef || r.transmittalRef, round: r.round + 1 }, b.note || null);
+  return { round: r.round, responseDueDate: due };
+}
+function respondRfi(a: Actor, id: string, b: { responseDate: string; response: string; responderName?: string | null; reference?: string | null }) {
+  need(a, "rfi.issue");
+  const r = getRfiRec(a, id);
+  if (!b.response?.trim()) throw rule("RESPONSE_REQUIRED", "Enter the consultant's answer.");
+  if (r.status !== "issued") throw rule("INVALID_STATE", "This RFI is not waiting for a consultant response.");
+  if (b.responseDate < r.issueDate! || b.responseDate > today()) throw rule("DATE_ORDER", "The response date must be between the issue date and today.");
+  db.rfiResponses.push({ id: newId("rres"), rfiId: r.id, round: r.round, responseDate: b.responseDate, responderName: b.responderName || null, reference: b.reference || null, response: b.response.trim(), recordedBy: a.user.id, recordedAt: nowIso() });
+  rfiMove(a, r, "responded", {}, b.reference ? `Response ref. ${b.reference}` : null);
+}
+function closeRfi(a: Actor, id: string, b: { closedDate: string; closureNote: string }) {
+  need(a, "rfi.issue");
+  const r = getRfiRec(a, id);
+  if (!b.closureNote?.trim()) throw rule("NOTE_REQUIRED", "Say what was done with the answer.");
+  if (r.status !== "responded") throw rule("INVALID_STATE", "Only an answered RFI can be closed.");
+  rfiMove(a, r, "closed", { closedDate: b.closedDate, closureNote: b.closureNote.trim() }, b.closureNote);
+  return { potentialVariation: r.costImpact !== "none" || r.timeImpact !== "none" };
+}
+function rfiRow(r: Rfi) {
+  const st = rfiState(r), pr = project(r.projectId), rev = db.dRevs.find((x) => x.id === r.drawingRevisionId), dw = rev ? db.drawings.find((d) => d.id === rev.drawingId) : null;
+  const recipientName = db.partners.find((c) => c.id === r.recipientCompanyId)?.name ?? null;
+  return { ...r, projectCode: pr.code, projectName: pr.name, originatorName: userName(r.originatorId), assigneeName: userName(r.assigneeId), recipientName,
+    originatorCompanyName: db.partners.find((c) => c.id === r.originatorCompanyId)?.name ?? null, drawing: dw && rev ? { id: dw.id, number: dw.number, revision: rev.revision } : null, ...st,
+    owner: st.ballInCourt === "consultant" ? (recipientName ?? "Consultant") : st.ballInCourt === "edge" ? (userName(r.assigneeId) ?? userName(r.originatorId)) : null };
 }
 
 // ───────────── routing ─────────────
@@ -1052,6 +1183,71 @@ route("PUT", "/api/site-reports/:id", (a, p, _q, b) => {
 route("POST", "/api/site-reports/:id/submit", (a, p) => { submitReport(a, p.id); return { ok: true }; });
 route("POST", "/api/site-reports/:id/review", (a, p, _q, b) => { reviewReport(a, p.id, b.decision, b.comment); return { ok: true }; });
 
+route("GET", "/api/rfis", (a, _p, q) => {
+  need(a, "rfi.view");
+  const text = (q.get("q") ?? "").toLowerCase();
+  return db.rfis.filter((r) => inScope(a, r.projectId) && (!q.get("projectId") || r.projectId === q.get("projectId")) && (!q.get("status") || r.status === q.get("status"))
+    && (!text || `${r.number} ${r.subject} ${r.question}`.toLowerCase().includes(text))).slice().reverse().map(rfiRow)
+    .filter((r) => (!q.get("ball") || r.ballInCourt === q.get("ball")) && (q.get("overdue") !== "true" || r.overdue));
+});
+route("POST", "/api/rfis", (a, _p, _q, b) => createRfi(a, b));
+route("GET", "/api/rfis/:id", (a, p) => {
+  const r = getRfiRec(a, p.id), info = revInfo(r.drawingRevisionId);
+  return { ...rfiRow(r), drawingInfo: info, drawingWarning: supersededWarning(info), potentialVariation: r.costImpact !== "none" || r.timeImpact !== "none",
+    responses: db.rfiResponses.filter((x) => x.rfiId === r.id).map((x) => ({ ...x, recordedByName: userName(x.recordedBy) })),
+    events: db.rfiEvents.filter((e) => e.rfiId === r.id).map((e) => ({ ...e, byName: userName(e.userId) })) };
+});
+route("PUT", "/api/rfis/:id", (a, p, _q, b) => {
+  need(a, "rfi.create");
+  const r = getRfiRec(a, p.id);
+  if (!["draft", "returned", "internal_review"].includes(r.status)) throw rule("INVALID_STATE", "An RFI can only be edited before it is issued.");
+  if (r.originatorId !== a.user.id && !can(a, "rfi.issue")) throw forbidden();
+  if (b.version !== r.version) throw conflict();
+  const { fields, warning } = rfiFields(b, r.projectId);
+  Object.assign(r, fields, { assigneeId: b.assigneeId || r.assigneeId, version: r.version + 1 });
+  return { ...r, warnings: warning ? [warning] : [] };
+});
+route("POST", "/api/rfis/:id/review", (a, p) => { sendRfiForReview(a, p.id); return { ok: true }; });
+route("POST", "/api/rfis/:id/return", (a, p, _q, b) => {
+  need(a, "rfi.issue");
+  const r = getRfiRec(a, p.id);
+  if (!b?.comment?.trim()) throw rule("COMMENT_REQUIRED", "Say what the originator should change.");
+  if (r.status !== "internal_review") throw rule("INVALID_STATE", "Only an RFI in internal review can be returned.");
+  rfiMove(a, r, "returned", {}, b.comment);
+  return { ok: true };
+});
+route("POST", "/api/rfis/:id/issue", (a, p, _q, b) => issueRfi(a, p.id, b));
+route("POST", "/api/rfis/:id/response", (a, p, _q, b) => { respondRfi(a, p.id, b); return { ok: true }; });
+route("POST", "/api/rfis/:id/close", (a, p, _q, b) => closeRfi(a, p.id, b));
+route("POST", "/api/rfis/:id/cancel", (a, p, _q, b) => {
+  need(a, "rfi.create");
+  const r = getRfiRec(a, p.id);
+  if (!RFI_OPEN.includes(r.status)) throw rule("INVALID_STATE", "This RFI is already closed or cancelled.");
+  rfiMove(a, r, "cancelled", {}, b?.reason || null);
+  return { ok: true };
+});
+route("GET", "/api/projects/:id/rfi-assignees", (a, p) => { need(a, "rfi.view"); needProject(a, p.id, "Project");
+  return db.users.filter((u) => { const x = actorOf(u); return (can(x, "rfi.create") || can(x, "rfi.issue")) && inScope(x, p.id); }).map((u) => ({ id: u.id, fullName: u.fullName })); });
+route("GET", "/api/drawings", (a, _p, q) => {
+  need(a, "project.view");
+  const text = (q.get("q") ?? "").toLowerCase();
+  return db.drawings.filter((d) => inScope(a, d.projectId) && (!q.get("projectId") || d.projectId === q.get("projectId")) && (!q.get("discipline") || d.discipline === q.get("discipline"))
+    && (!text || `${d.number} ${d.title}`.toLowerCase().includes(text)))
+    .sort((x, y) => project(x.projectId).code.localeCompare(project(y.projectId).code) || x.number.localeCompare(y.number))
+    .map((d) => { const st = revStates(d.id), cc = st.find((r) => r.state === "current_construction");
+      return { ...d, projectCode: project(d.projectId).code, revisions: st.length, latest: st[0] ? { id: st[0].id, revision: st[0].revision, issueDate: st[0].issueDate, purpose: st[0].purpose } : null,
+        construction: cc ? { id: cc.id, revision: cc.revision, issueDate: cc.issueDate, fileRef: cc.fileRef } : null }; });
+});
+route("POST", "/api/drawings", (a, _p, _q, b) => createDrawing(a, b));
+route("GET", "/api/drawings/:id", (a, p) => {
+  need(a, "project.view");
+  const d = byId(db.drawings, p.id, "Drawing"); needProject(a, d.projectId, "Drawing");
+  const st = revStates(d.id).map((r) => ({ ...r, recordedByName: userName(r.recordedBy) }));
+  return { ...d, projectCode: project(d.projectId).code, projectName: project(d.projectId).name, revisions: st,
+    rfis: db.rfis.filter((r) => st.some((x) => x.id === r.drawingRevisionId)).map((r) => ({ id: r.id, number: r.number, subject: r.subject, status: r.status, drawingRevisionId: r.drawingRevisionId, revision: st.find((x) => x.id === r.drawingRevisionId)?.revision ?? null })) };
+});
+route("POST", "/api/drawings/:id/revisions", (a, p, _q, b) => addRev(a, p.id, b));
+
 export const DEMO_PASSWORD = "Demo@2026!";
 
 /** Answers one API call the way the real server would (status code + JSON body). */
@@ -1254,4 +1450,35 @@ export function seed() {
   addProgress(pmA, p101.id, { asOfDate: addDays(t, -2), plannedPct: "46", actualPct: "41", forecastEndDate: p101.plannedEndDate, summary: "Blockwork 2 floors behind; MEP first fix on plan.", risks: "Bathroom mock-up rejected once; tile approval needed before L6 finishes." });
   addProgress(pmB, p102.id, { asOfDate: addDays(t, -3), plannedPct: "62", actualPct: "49", forecastEndDate: addDays(p102.plannedEndDate, 21), summary: "Pool works waiting for tile and coping approval.", risks: "Client may delay handover acceptance; pool tile sample overdue with consultant." });
   addProgress(pmB, p103.id, { asOfDate: addDays(t, -1), plannedPct: "12", actualPct: "13", summary: "Cable tray ahead of plan." });
+  // ── Drawings and RFIs (mirrors server/db/seed.ts) ──
+  const file = (n: string, rev: string) => ["\\\\edge-server", "Projects", "Drawings", `${n}_${rev}.pdf`].join("\\");
+  const dwg = (projectId: string, number: string, title: string, discipline: string, revs: [string, number, string][]) => {
+    const [first, ...rest] = revs;
+    const d = createDrawing(dc, { projectId, number, title, discipline, firstRevision: { revision: first[0], issueDate: addDays(t, first[1]), purpose: first[2], fileRef: file(number, first[0]), distribution: "Site team" } });
+    for (const [rev, day, purpose] of rest) addRev(dc, d.id, { revision: rev, issueDate: addDays(t, day), purpose, fileRef: file(number, rev), distribution: "Site team, subcontractors" });
+    return Object.fromEntries(db.dRevs.filter((r) => r.drawingId === d.id).map((r) => [r.revision, r.id]));
+  };
+  const arc = dwg(p101.id, "ARC-L02-201", "Level 2 floor plan", "architectural", [["A", -60, "for_approval"], ["B", -45, "for_construction"], ["C", -10, "for_construction"]]);
+  const mepD = dwg(p101.id, "MEP-L04-401", "Level 4 HVAC layout", "mechanical", [["0", -50, "for_construction"], ["1", -3, "for_approval"]]);
+  const str = dwg(p101.id, "STR-L03-301", "Level 3 slab and balcony details", "structural", [["B", -70, "for_construction"]]);
+  dwg(p102.id, "LND-101", "Hardscape and planting layout", "landscape", [["1", -55, "for_construction"], ["2", -20, "for_construction"]]);
+  const pool = dwg(p102.id, "POOL-201", "Pool sections and coping details", "architectural", [["1", -40, "for_construction"]]);
+  const ele = dwg(p103.id, "ELE-B-501", "Cable tray routes, zone B", "electrical", [["0", -25, "for_construction"]]);
+  type Flow = { issue?: number; answer?: [number, string]; close?: [number, string]; review?: boolean };
+  const rfiDemo = (author: Actor, projectId: string, input: Omit<RfiIn, "projectId">, flow: Flow) => {
+    const x = createRfi(author, { projectId, ...input });
+    if (flow.review) sendRfiForReview(author, x.id);
+    if (flow.issue !== undefined) issueRfi(dc, x.id, { issueDate: addDays(t, flow.issue), transmittalRef: `TR-${x.number.slice(-3)}` });
+    if (flow.answer) respondRfi(dc, x.id, { responseDate: addDays(t, flow.answer[0]), response: flow.answer[1], responderName: "Resident Engineer (Demo)" });
+    if (flow.close) closeRfi(dc, x.id, { closedDate: addDays(t, flow.close[0]), closureNote: flow.close[1] });
+  };
+  rfiDemo(se, p101.id, { discipline: "architectural", subject: "Door D-12 head height conflict", question: "ARC-L02-201 shows a 2100 mm head height; the door schedule says 2400 mm. Which applies?", location: "Level 2, corridor C", drawingRevisionId: arc.B, costImpact: "possible" },
+    { issue: -12, answer: [-6, "2400 mm applies. A revised door schedule will follow."], close: [-5, "Frames ordered at 2400 mm. QS to assess the cost difference."] });
+  rfiDemo(se, p101.id, { discipline: "structural", subject: "Balcony slab edge detail", question: "STR-L03-301 does not show the drip groove and edge reinforcement at the balcony. Please provide the detail.", location: "Level 3, balconies B1–B6", drawingRevisionId: str.B, blockedActivity: "Balcony formwork, Level 3", priority: "high", timeImpact: "possible" }, { issue: -15 });
+  rfiDemo(se, p101.id, { discipline: "mechanical", subject: "Supply duct clashes with beam at grid C/4", question: "The 600×400 supply duct clashes with beam B4-12. Can the duct be split into two 600×200 ducts?", location: "Level 4, grid C/4", drawingRevisionId: mepD["0"], originatorCompanyId: mep.id, timeImpact: "possible" }, { issue: -4 });
+  rfiDemo(se, p101.id, { discipline: "architectural", subject: "Ceiling void depth in corridors", question: "Confirm the minimum ceiling void in corridors to fit the sprinkler mains.", location: "Levels 2–6" }, { issue: -9, answer: [-1, "Minimum 450 mm. Ceiling level to drop to 2600 mm in corridors only."] });
+  rfiDemo(se, p101.id, { discipline: "architectural", subject: "Floor finish at lift lobbies", question: "The finishes schedule lists porcelain tile, the interior design pack shows marble. Please confirm.", location: "All lift lobbies", costImpact: "possible" }, { review: true });
+  rfiDemo(seB, p102.id, { discipline: "architectural", subject: "Pool coping stone fixing method", question: "Confirm whether the coping stones are to be mechanically fixed or bedded only.", location: "Pool", drawingRevisionId: pool["1"], blockedActivity: "Pool coping installation" }, { issue: -10 });
+  rfiDemo(seB, p102.id, { discipline: "landscape", subject: "Irrigation sleeve depth under the driveway", question: "Confirm the sleeve depth below the interlock paving.", location: "Driveway" }, { issue: -20, answer: [-16, "600 mm minimum to top of sleeve."], close: [-15, "Installed at 600 mm and inspected."] });
+  rfiDemo(pmB, p103.id, { discipline: "electrical", subject: "Cable tray support spacing", question: "Specification says 1.5 m, the tray manufacturer allows 2.0 m. Which applies?", location: "Zone B", drawingRevisionId: ele["0"], originatorCompanyId: mep.id }, { issue: -2 });
 }
