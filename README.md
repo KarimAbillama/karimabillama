@@ -51,6 +51,13 @@ Screenshots from the automated browser test are in `docs/screenshots/`.
 | `docs/THIRD_PARTY.md` | Licences and running-cost assumptions |
 | `docs/PRODUCT_BRIEF.md` | The original product brief |
 
+## Clickable preview (one web page)
+
+`npm run build:preview` creates `dist/edge-scm-preview.html`, a single page that runs the real
+screens against an in-browser stand-in for the server (`preview/mockServer.ts`). It uses invented
+data, forgets everything on reload, and is for showing the app only. The tested business logic is
+the server.
+
 ## Offline demo for Windows (no installs)
 
 `npm run build:offline` creates `dist/EDGE-SCM-Offline-Windows.zip`. The zip contains Node.js,

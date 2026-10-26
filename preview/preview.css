@@ -1,0 +1,13 @@
+/* Strip above the app that explains the preview and switches between demo people. */
+.preview-bar { background: #fff4e5; border-bottom: 1px solid #f0c48a; color: #4a3210; padding: 0.5rem 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: center; font-size: 0.875rem; }
+.preview-note { min-width: 0; }
+.preview-people { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.preview-label { font-weight: 600; margin-right: 0.15rem; }
+.preview-people button { font: inherit; font-size: 0.8rem; padding: 0.25rem 0.6rem; border-radius: 999px; border: 1px solid #e0a65a; background: #fff; color: #4a3210; cursor: pointer; }
+.preview-people button:hover { background: #ffe9cc; }
+.preview-people button.on { background: #d9822b; border-color: #d9822b; color: #fff; }
+.preview-people button:focus-visible { outline: 2px solid #14304f; outline-offset: 2px; }
+.preview-start { padding: 0.75rem 1rem 0; text-align: center; color: #4a3210; }
+.preview-start code { background: #f3f4f2; padding: 0.1rem 0.35rem; border-radius: 4px; }
+.login { min-height: auto; padding-top: 1.5rem; }
+.preview-toast { position: fixed; left: 50%; bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: #14304f; color: #fff; padding: 0.6rem 1rem; border-radius: 6px; z-index: 100; max-width: calc(100% - 2rem); font-size: 0.875rem; }
