@@ -129,6 +129,8 @@ export const projects = pgTable("projects", {
   // The consultant who reviews submittals, and how many calendar days the contract gives them (A-28).
   consultantCompanyId: uuid("consultant_company_id").references(() => companies.id),
   submittalReviewDays: integer("submittal_review_days").notNull().default(14),
+  // Days the consultant has to answer an RFI unless the RFI states a date (A-36).
+  rfiResponseDays: integer("rfi_response_days").notNull().default(7),
   createdAt: createdAt(),
 }, (t) => [
   unique("projects_code_unique").on(t.code),
@@ -696,3 +698,107 @@ export const projectProgressUpdates = pgTable("project_progress_updates", {
   index("project_progress_project_idx").on(t.projectId, t.asOfDate),
   check("project_progress_pct_chk", sql`${t.plannedPct} between 0 and 100 and ${t.actualPct} between 0 and 100`),
 ]);
+
+// ───────────────────────────── Drawings & RFIs ─────────────────────────────
+
+export type DrawingPurpose = "tender" | "for_information" | "for_approval" | "for_construction" | "as_built";
+
+/** Drawing register: one row per drawing number on a project; revisions below keep every issue. */
+export const drawings = pgTable("drawings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  number: text("number").notNull(),
+  title: text("title").notNull(),
+  discipline: text("discipline").notNull(),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: createdAt(),
+}, (t) => [
+  unique("drawings_project_number_unique").on(t.projectId, t.number),
+  check("drawings_discipline_chk", sql`${t.discipline} in ('civil','structural','architectural','mechanical','electrical','plumbing','fire','landscape','other')`),
+]);
+
+/** Every issued revision is kept (append-only). The newest construction issue is the one to build from. */
+export const drawingRevisions = pgTable("drawing_revisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  drawingId: uuid("drawing_id").notNull().references(() => drawings.id),
+  revision: text("revision").notNull(),
+  issueDate: date("issue_date", { mode: "string" }).notNull(),
+  purpose: text("purpose").notNull().$type<DrawingPurpose>(),
+  transmittalRef: text("transmittal_ref"),
+  // Where the PDF is kept until file storage exists, e.g. a path on EDGE's file server.
+  fileRef: text("file_ref"),
+  distribution: text("distribution"),
+  notes: text("notes"),
+  recordedBy: uuid("recorded_by").notNull().references(() => users.id),
+  recordedAt: createdAt(),
+}, (t) => [
+  unique("drawing_revisions_rev_unique").on(t.drawingId, t.revision),
+  index("drawing_revisions_drawing_idx").on(t.drawingId, t.issueDate),
+  check("drawing_revisions_purpose_chk", sql`${t.purpose} in ('tender','for_information','for_approval','for_construction','as_built')`),
+]);
+
+export type RfiStatus = "draft" | "internal_review" | "returned" | "issued" | "responded" | "closed" | "cancelled";
+export type Impact = "none" | "possible" | "yes";
+
+export const rfis = pgTable("rfis", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  number: text("number").notNull(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  discipline: text("discipline").notNull(),
+  subject: text("subject").notNull(),
+  question: text("question").notNull(),
+  location: text("location"),
+  drawingRevisionId: uuid("drawing_revision_id").references(() => drawingRevisions.id),
+  boqRef: text("boq_ref"),
+  // The site activity that cannot proceed until the RFI is answered.
+  blockedActivity: text("blocked_activity"),
+  originatorId: uuid("originator_id").notNull().references(() => users.id),
+  originatorCompanyId: uuid("originator_company_id").references(() => companies.id),
+  assigneeId: uuid("assignee_id").references(() => users.id),
+  recipientCompanyId: uuid("recipient_company_id").references(() => companies.id),
+  priority: text("priority").notNull().default("normal").$type<"low" | "normal" | "high" | "urgent">(),
+  costImpact: text("cost_impact").notNull().default("none").$type<Impact>(),
+  timeImpact: text("time_impact").notNull().default("none").$type<Impact>(),
+  status: text("status").notNull().$type<RfiStatus>(),
+  round: integer("round").notNull().default(0),
+  issueDate: date("issue_date", { mode: "string" }),
+  responseDueDate: date("response_due_date", { mode: "string" }),
+  transmittalRef: text("transmittal_ref"),
+  closedDate: date("closed_date", { mode: "string" }),
+  closureNote: text("closure_note"),
+  version: integer("version").notNull().default(1),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  unique("rfis_number_unique").on(t.number),
+  index("rfis_project_idx").on(t.projectId, t.status),
+  check("rfis_status_chk", sql`${t.status} in ('draft','internal_review','returned','issued','responded','closed','cancelled')`),
+  check("rfis_priority_chk", sql`${t.priority} in ('low','normal','high','urgent')`),
+  check("rfis_impact_chk", sql`${t.costImpact} in ('none','possible','yes') and ${t.timeImpact} in ('none','possible','yes')`),
+  check("rfis_discipline_chk", sql`${t.discipline} in ('civil','structural','architectural','mechanical','electrical','plumbing','fire','landscape','other')`),
+  check("rfis_dates_chk", sql`${t.responseDueDate} is null or ${t.issueDate} is null or ${t.responseDueDate} >= ${t.issueDate}`),
+]);
+
+/** Consultant responses as received (append-only). Recording a response never closes the RFI. */
+export const rfiResponses = pgTable("rfi_responses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  rfiId: uuid("rfi_id").notNull().references(() => rfis.id),
+  round: integer("round").notNull(),
+  responseDate: date("response_date", { mode: "string" }).notNull(),
+  responderName: text("responder_name"),
+  reference: text("reference"),
+  response: text("response").notNull(),
+  recordedBy: uuid("recorded_by").notNull().references(() => users.id),
+  recordedAt: createdAt(),
+}, (t) => [index("rfi_responses_rfi_idx").on(t.rfiId)]);
+
+/** Controlled transition history (append-only). */
+export const rfiEvents = pgTable("rfi_events", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  rfiId: uuid("rfi_id").notNull().references(() => rfis.id),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status").notNull(),
+  note: text("note"),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("rfi_events_rfi_idx").on(t.rfiId)]);

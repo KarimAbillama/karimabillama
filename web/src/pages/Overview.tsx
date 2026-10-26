@@ -9,6 +9,7 @@ interface ProjectRow {
   overall: Rag;
   programme: { asOf: string; plannedPct: string; actualPct: string; variancePct: string; forecastEndDate: string | null; plannedEndDate: string | null; lateFinish: boolean; stale: boolean; summary: string | null; risks: string | null; rag: Rag } | null;
   approvals: { total: number; withConsultant: number; overdue: number; maxOverdueDays: number; toResubmit: number; lateForSite: number; approved: number; rag: Rag } | null;
+  rfis: { open: number; withConsultant: number; overdue: number; maxOverdueDays: number; blocking: number; toClose: number; rag: Rag } | null;
   site: { lastReportDate: string | null; missingWorkdays: number; headcount: number; delayDays: number; delayCauses: string[]; rag: Rag };
   safety: { incidents: number; rag: Rag };
   supply: { lateDeliveries: number; worstLateDays: number; uncoveredSoon: number; rag: Rag };
@@ -17,7 +18,7 @@ interface ProjectRow {
 }
 interface OverviewData {
   today: string; expectedReportDay: string;
-  totals: { projects: number; red: number; amber: number; headcount: number; submittalsWithConsultant: number; submittalsOverdue: number; myApprovals: number };
+  totals: { projects: number; red: number; amber: number; headcount: number; submittalsWithConsultant: number; submittalsOverdue: number; rfisWithConsultant: number; rfisOverdue: number; myApprovals: number };
   projects: ProjectRow[];
 }
 
@@ -45,6 +46,7 @@ export function Overview() {
           <div className={data.totals.amber ? "t-amber" : ""}><strong>{data.totals.amber}</strong><span>to watch</span></div>
           <div><strong>{data.totals.headcount}</strong><span>people on site (latest reports)</span></div>
           {can("submittal.view") && <Link to="/submittals?ball=consultant"><strong>{data.totals.submittalsWithConsultant}</strong><span>submittals with consultants{data.totals.submittalsOverdue ? `, ${data.totals.submittalsOverdue} overdue` : ""}</span></Link>}
+          {can("rfi.view") && <Link to="/rfis?ball=consultant"><strong>{data.totals.rfisWithConsultant}</strong><span>RFIs with consultants{data.totals.rfisOverdue ? `, ${data.totals.rfisOverdue} overdue` : ""}</span></Link>}
           <Link to="/approvals"><strong>{data.totals.myApprovals}</strong><span>approvals waiting for you</span></Link>
         </div>
 
@@ -66,6 +68,11 @@ export function Overview() {
               {r.approvals && (
                 <Chip rag={r.approvals.rag} label="Approvals" to={`/submittals?project=${r.project.id}`}>
                   {r.approvals.total === 0 ? "No submittals yet" : <>{r.approvals.withConsultant} with consultant{r.approvals.overdue ? ` (${r.approvals.overdue} overdue)` : ""} · {r.approvals.toResubmit} to resubmit</>}
+                </Chip>
+              )}
+              {r.rfis && (
+                <Chip rag={r.rfis.rag} label="RFIs" to={`/rfis?project=${r.project.id}`}>
+                  {r.rfis.open === 0 ? "No open RFIs" : <>{r.rfis.withConsultant} with consultant{r.rfis.overdue ? ` (${r.rfis.overdue} late)` : ""}{r.rfis.blocking ? ` · ${r.rfis.blocking} holding up work` : ""}{r.rfis.toClose ? ` · ${r.rfis.toClose} to close` : ""}</>}
                 </Chip>
               )}
               <Chip rag={r.site.rag} label="Site" to={`/site-reports?project=${r.project.id}`}>
@@ -94,7 +101,9 @@ export function Overview() {
 
             <div className="actions">
               <Link className="btn secondary small" to={`/site-reports?project=${r.project.id}`}>Site reports</Link>
+              {can("rfi.view") && <Link className="btn secondary small" to={`/rfis?project=${r.project.id}`}>RFIs</Link>}
               {can("submittal.view") && <Link className="btn secondary small" to={`/submittals?project=${r.project.id}`}>Submittals</Link>}
+              <Link className="btn secondary small" to={`/drawings?project=${r.project.id}`}>Drawings</Link>
               <Link className="btn secondary small" to={`/report?project=${r.project.id}`}>Materials report</Link>
               {can("progress.update") && <button className="btn secondary small" onClick={() => setUpdating(updating === r.project.id ? null : r.project.id)}>Update progress</button>}
               {r.programme && <span className="muted small">Progress as at {fmtDate(r.programme.asOf)}{r.programme.stale ? " (out of date)" : ""}</span>}
@@ -102,7 +111,7 @@ export function Overview() {
             {updating === r.project.id && <ProgressForm row={r} onDone={() => { setUpdating(null); reload(); }} />}
           </section>
         ))}
-        <p className="muted small">Ratings use proposed thresholds (to be confirmed): programme amber 3 points behind, red 10 behind or late finish; submittal red when more than 7 days overdue or not approved by the date site needs it; site red after 3 working days without a report.</p>
+        <p className="muted small">Ratings use proposed thresholds (to be confirmed): programme amber 3 points behind, red 10 behind or late finish; submittal red when more than 7 days overdue or not approved by the date site needs it; RFI red when more than 7 days overdue or holding up site work; site red after 3 working days without a report.</p>
       </>)}
     </Page>
   );

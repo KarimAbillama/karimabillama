@@ -14,6 +14,8 @@ import { AdminUsers, AuditLog } from "./pages/Admin";
 import { Overview } from "./pages/Overview";
 import { SubmittalDetail, SubmittalForm, SubmittalList } from "./pages/Submittals";
 import { SiteReportDetail, SiteReportForm, SiteReportList } from "./pages/SiteReports";
+import { RfiDetail, RfiForm, RfiList } from "./pages/Rfis";
+import { DrawingDetail, DrawingForm, DrawingList } from "./pages/Drawings";
 
 /** Owners and managers who look across all projects start on the overview. */
 const OVERVIEW_FIRST = ["director", "operations_manager", "management_viewer"];
@@ -65,6 +67,13 @@ export function App() {
           <Route path="/submittals/new" element={<SubmittalForm />} />
           <Route path="/submittals/:id" element={<SubmittalDetail />} />
           <Route path="/submittals/:id/edit" element={<SubmittalForm />} />
+          <Route path="/rfis" element={<RfiList />} />
+          <Route path="/rfis/new" element={<RfiForm />} />
+          <Route path="/rfis/:id" element={<RfiDetail />} />
+          <Route path="/rfis/:id/edit" element={<RfiForm />} />
+          <Route path="/drawings" element={<DrawingList />} />
+          <Route path="/drawings/new" element={<DrawingForm />} />
+          <Route path="/drawings/:id" element={<DrawingDetail />} />
           <Route path="/site-reports" element={<SiteReportList />} />
           <Route path="/site-reports/new" element={<SiteReportForm />} />
           <Route path="/site-reports/:id" element={<SiteReportDetail />} />
@@ -105,7 +114,9 @@ function Shell({ children, onLogout }: { children: React.ReactNode; onLogout: ()
     [overviewFirst ? "/today" : "/overview", overviewFirst ? "My day" : "All projects", overviewFirst || can("report.view")],
     ["/approvals", "Approvals", can("mr.approve") || can("po.approve")],
     ["/site-reports", "Daily site reports", can("project.view"), "Project control"],
+    ["/rfis", "RFIs", can("rfi.view")],
     ["/submittals", "Submittals & mock-ups", can("submittal.view")],
+    ["/drawings", "Drawings", can("project.view")],
     ["/material-requests", "Material requests", can("mr.view"), "Materials"],
     ["/purchase-orders", "Purchase orders", can("po.view")],
     ["/stock", "Stock", can("stock.view")],

@@ -15,7 +15,7 @@
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { DbOrTx } from "../db/client.js";
-import { projects, siteReports, submittalRevisions, submittals } from "../db/schema.js";
+import { projects, rfis, siteReports, submittalRevisions, submittals } from "../db/schema.js";
 import { type Actor, can, canAccessProject, requirePerm, requireProject } from "../auth/actor.js";
 import { businessToday } from "../lib/dates.js";
 import { lastWorkday } from "../lib/workdays.js";
@@ -25,6 +25,7 @@ import { myPendingApprovals } from "./approvals.js";
 import { lineFulfilment } from "./materialRequests.js";
 import { listLocations, stockPosition } from "./inventory.js";
 import { submittalState } from "./submittals.js";
+import { rfiState } from "./rfis.js";
 
 const COMMITTED_STATUSES = sql`('approved','partially_received','received','closed')`;
 const NOT_TRACKED = "Not tracked in Phase 1";
@@ -215,6 +216,28 @@ export async function dashboard(db: DbOrTx, actor: Actor) {
       } else if (st.ballInCourt === "edge") {
         actions.push({ kind: "submittal_resubmit", title: `Resubmit ${s.number}`, detail: `${s.title} · returned ${s.status === "rejected" ? "rejected" : "for revision"}`,
           due: s.requiredBy, overdue: st.lateForSite, owner: "Document controller", projectCode, link: `/submittals/${s.id}` });
+      }
+    }
+  }
+
+  // RFIs: overdue with the consultant, answered and waiting for EDGE to act, waiting for review, returned.
+  if (can(actor, "rfi.view")) {
+    const open = await db.select({ r: rfis, projectCode: projects.code }).from(rfis).innerJoin(projects, eq(projects.id, rfis.projectId))
+      .where(and(inArray(rfis.status, ["internal_review", "returned", "issued", "responded"]), scopeSql("rfis.project_id")));
+    const issuer = can(actor, "rfi.issue");
+    for (const { r, projectCode } of open) {
+      const mine = r.assigneeId === actor.userId || r.originatorId === actor.userId;
+      const st = rfiState(r, today);
+      const link = `/rfis/${r.id}`;
+      if (st.overdue && (issuer || mine)) {
+        actions.push({ kind: "rfi_overdue", title: `${r.number} overdue with the consultant (${st.daysOverdue} days)`, detail: `${r.subject}${r.blockedActivity ? ` · blocks: ${r.blockedActivity}` : ""}`,
+          due: r.responseDueDate, overdue: true, owner: "Consultant (chase)", projectCode, link });
+      } else if (r.status === "responded" && (issuer || mine)) {
+        actions.push({ kind: "rfi_answered", title: `${r.number} answered: act on it and close`, detail: r.subject, due: null, overdue: false, owner: "You", projectCode, link });
+      } else if (r.status === "internal_review" && issuer) {
+        actions.push({ kind: "rfi_review", title: `Review ${r.number} before it goes to the consultant`, detail: r.subject, due: null, overdue: false, owner: "You", projectCode, link });
+      } else if (r.status === "returned" && r.originatorId === actor.userId) {
+        actions.push({ kind: "rfi_returned", title: `${r.number} returned to you for changes`, detail: r.subject, due: null, overdue: false, owner: "You", projectCode, link });
       }
     }
   }

@@ -8,6 +8,7 @@ interface Dash { today: string; actions: Action[]; projects: { id: string; code:
 const KIND_LABEL: Record<string, string> = {
   approval: "Approval", my_draft: "My document", mr_uncovered: "Material shortage", po_delivery: "Delivery",
   transfer_in_transit: "Transfer", discrepancy: "Discrepancy", low_stock: "Low stock",
+  rfi_overdue: "RFI late", rfi_answered: "RFI answered", rfi_review: "RFI review", rfi_returned: "RFI returned",
   submittal_overdue: "Submittal late", submittal_resubmit: "Submittal", site_report_missing: "Daily report", site_report_review: "Daily report",
 };
 
@@ -20,6 +21,7 @@ export function Home() {
     <Page title={`Good day, ${me.fullName.split(" ")[0] === "Demo" ? me.fullName : me.fullName.split(" ")[0]}`} subtitle={`Today in Dubai: ${data?.today ?? "…"}${project ? ` · Filtered to ${project.code}` : ""}`}
       actions={<>
         {can("sitereport.create") && <Link className="btn primary" to="/site-reports/new">Write today's report</Link>}
+        {can("rfi.create") && <Link className="btn secondary" to="/rfis/new">New RFI</Link>}
         {can("mr.create") && <Link className="btn secondary" to="/material-requests/new">New material request</Link>}
         {can("stock.issue") && <Link className="btn secondary" to="/issues/new">Issue stock</Link>}
         {can("stock.transfer") && <Link className="btn secondary" to="/transfers/new">New transfer</Link>}

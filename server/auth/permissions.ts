@@ -30,6 +30,10 @@ export const PERMISSIONS = {
   "sitereport.create": "Write and submit daily site reports",
   "sitereport.review": "Review daily site reports (accept or return)",
   "progress.update": "Record weekly project progress (planned vs actual, forecast finish)",
+  "rfi.view": "View RFIs and consultant responses",
+  "rfi.create": "Raise and edit RFIs and send them for internal review",
+  "rfi.issue": "Review RFIs, issue them to the consultant, record responses and close them",
+  "drawing.manage": "Register drawings and record new revisions",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

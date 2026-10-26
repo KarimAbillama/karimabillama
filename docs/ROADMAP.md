@@ -27,6 +27,8 @@ project report, plus transfers, reservations, stock card, action dashboard, CSV 
   safety; PM review; reminders for missing reports
 - Weekly progress updates (planned vs actual %, forecast finish, risks)
 
+**Slice 3: RFIs and drawing register** ✅ built and tested (scenarios 7 and 9)
+
 Next slices, in proposed order (reordered after EDGE's answers):
 
 0. **Money**: client payment applications and certificates, retention, variations (pending vs approved),
@@ -40,8 +42,6 @@ Next slices, in proposed order (reordered after EDGE's answers):
    from receipts, PDF export, weekly client report generated from the dailies.
 3. **Basic attendance.** Foreman crew entry on mobile, no overlapping timesheets, approval lock,
    controlled corrections (scenario 6). No payroll calculation.
-4. **RFI register.** States, consultant response recorded separately from internal closure, overdue
-   ageing, linked drawing/activity (scenario 7, partially).
 5. **Stock completeness.** Return to supplier for rejected goods, issue returns, stock counts with
    variance approval, emergency issue override with audit reason, PO amendments after receipt.
 6. **Production hardening.** MFA or Microsoft 365 SSO for privileged users, security headers/CSP,

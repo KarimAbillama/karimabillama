@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import type { Tx } from "../db/client.js";
 import { businessYear } from "./dates.js";
 
-export type DocPrefix = "MR" | "PO" | "GRN" | "ISS" | "TRF" | "SUB";
+export type DocPrefix = "MR" | "PO" | "GRN" | "ISS" | "TRF" | "SUB" | "RFI";
 
 /**
  * Concurrency-safe document numbers, e.g. PO-2026-00042.

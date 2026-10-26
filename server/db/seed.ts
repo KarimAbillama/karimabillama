@@ -8,7 +8,7 @@ import { eq, inArray } from "drizzle-orm";
 import { createDb, type DB } from "./client.js";
 import { baseSeed } from "./baseSeed.js";
 import {
-  companies, costCodes, itemUnitConversions, items, locations, projectMembers, projects, roles, sites, userRoles, users,
+  companies, costCodes, drawingRevisions, itemUnitConversions, items, locations, projectMembers, projects, roles, sites, userRoles, users,
 } from "./schema.js";
 import { hashPassword } from "../auth/sessions.js";
 import { loadActor, type Actor } from "../auth/actor.js";
@@ -21,6 +21,8 @@ import { dispatchTransfer, issueStock, postOpeningBalance } from "../services/in
 import { createSubmittal, recordResponse, setCodes, submitToConsultant } from "../services/submittals.js";
 import { createSiteReport, reviewSiteReport, submitSiteReport } from "../services/siteReports.js";
 import { addProgressUpdate } from "../services/overview.js";
+import { addRevision, createDrawing } from "../services/drawings.js";
+import { closeRfi, createRfi, issueRfi, recordRfiResponse, sendForReview } from "../services/rfis.js";
 import { SITE_WORKING_DAYS } from "../lib/workdays.js";
 import { weekday } from "../lib/dates.js";
 import { myPendingApprovals } from "../services/approvals.js";
@@ -329,6 +331,52 @@ async function projectControlDemo(db: DB, r: {
   await addProgressUpdate(db, pmB, { projectId: r.p102.id, asOfDate: addDays(today, -3), plannedPct: "62", actualPct: "49", forecastEndDate: addDays(p2.plannedEndDate!, 21),
     summary: "Pool works waiting for tile and coping approval.", risks: "Client may delay handover acceptance; pool tile sample overdue with consultant." });
   await addProgressUpdate(db, pmB, { projectId: r.p103.id, asOfDate: addDays(today, -1), plannedPct: "12", actualPct: "13", summary: "Cable tray ahead of plan." });
+
+  // ── Drawing register ──
+  type Rev = [string, number, "for_approval" | "for_construction" | "for_information"];
+  const drawing = async (projectId: string, number: string, title: string, discipline: string, revs: Rev[]) => {
+    const [first, ...rest] = revs;
+    // e.g. \\edge-server\Projects\Drawings\ARC-L02-201_C.pdf (a path on EDGE's file server)
+    const file = (rev: string) => ["\\\\edge-server", "Projects", "Drawings", `${number}_${rev}.pdf`].join("\\");
+    const d = await createDrawing(db, dc, { projectId, number, title, discipline, firstRevision: { revision: first[0], issueDate: addDays(today, first[1]), purpose: first[2], fileRef: file(first[0]), distribution: "Site team" } });
+    const ids: Record<string, string> = {};
+    for (const [rev, day, purpose] of rest) ids[rev] = (await addRevision(db, dc, d.id, { revision: rev, issueDate: addDays(today, day), purpose, fileRef: file(rev), distribution: "Site team, subcontractors" })).id;
+    const all = await db.select().from(drawingRevisions).where(eq(drawingRevisions.drawingId, d.id));
+    return Object.fromEntries(all.map((x) => [x.revision, x.id]));
+  };
+  const arc = await drawing(r.p101.id, "ARC-L02-201", "Level 2 floor plan", "architectural", [["A", -60, "for_approval"], ["B", -45, "for_construction"], ["C", -10, "for_construction"]]);
+  const mepDwg = await drawing(r.p101.id, "MEP-L04-401", "Level 4 HVAC layout", "mechanical", [["0", -50, "for_construction"], ["1", -3, "for_approval"]]);
+  const str = await drawing(r.p101.id, "STR-L03-301", "Level 3 slab and balcony details", "structural", [["B", -70, "for_construction"]]);
+  await drawing(r.p102.id, "LND-101", "Hardscape and planting layout", "landscape", [["1", -55, "for_construction"], ["2", -20, "for_construction"]]);
+  const pool = await drawing(r.p102.id, "POOL-201", "Pool sections and coping details", "architectural", [["1", -40, "for_construction"]]);
+  const ele = await drawing(r.p103.id, "ELE-B-501", "Cable tray routes, zone B", "electrical", [["0", -25, "for_construction"]]);
+
+  // ── RFIs ──
+  type Flow = { issue?: number; answer?: [number, string]; close?: [number, string]; review?: boolean };
+  const rfiDemo = async (author: Actor, projectId: string, input: Omit<Parameters<typeof createRfi>[2], "projectId">, flow: Flow) => {
+    const x = await createRfi(db, author, { projectId, ...input });
+    if (flow.review) await sendForReview(db, author, x.id);
+    if (flow.issue !== undefined) await issueRfi(db, dc, x.id, { issueDate: addDays(today, flow.issue), transmittalRef: `TR-${x.number.slice(-3)}` });
+    if (flow.answer) await recordRfiResponse(db, dc, x.id, { responseDate: addDays(today, flow.answer[0]), response: flow.answer[1], responderName: "Resident Engineer (Demo)" });
+    if (flow.close) await closeRfi(db, dc, x.id, { closedDate: addDays(today, flow.close[0]), closureNote: flow.close[1] });
+  };
+  await rfiDemo(se, r.p101.id, { discipline: "architectural", subject: "Door D-12 head height conflict", question: "ARC-L02-201 shows a 2100 mm head height; the door schedule says 2400 mm. Which applies?",
+    location: "Level 2, corridor C", drawingRevisionId: arc.B, costImpact: "possible" },
+    { issue: -12, answer: [-6, "2400 mm applies. A revised door schedule will follow."], close: [-5, "Frames ordered at 2400 mm. QS to assess the cost difference."] });
+  await rfiDemo(se, r.p101.id, { discipline: "structural", subject: "Balcony slab edge detail", question: "STR-L03-301 does not show the drip groove and edge reinforcement at the balcony. Please provide the detail.",
+    location: "Level 3, balconies B1–B6", drawingRevisionId: str.B, blockedActivity: "Balcony formwork, Level 3", priority: "high", timeImpact: "possible" }, { issue: -15 });
+  await rfiDemo(se, r.p101.id, { discipline: "mechanical", subject: "Supply duct clashes with beam at grid C/4", question: "The 600×400 supply duct clashes with beam B4-12. Can the duct be split into two 600×200 ducts?",
+    location: "Level 4, grid C/4", drawingRevisionId: mepDwg["0"], originatorCompanyId: mep.id, timeImpact: "possible" }, { issue: -4 });
+  await rfiDemo(se, r.p101.id, { discipline: "architectural", subject: "Ceiling void depth in corridors", question: "Confirm the minimum ceiling void in corridors to fit the sprinkler mains.", location: "Levels 2–6" },
+    { issue: -9, answer: [-1, "Minimum 450 mm. Ceiling level to drop to 2600 mm in corridors only."] });
+  await rfiDemo(se, r.p101.id, { discipline: "architectural", subject: "Floor finish at lift lobbies", question: "The finishes schedule lists porcelain tile, the interior design pack shows marble. Please confirm.",
+    location: "All lift lobbies", costImpact: "possible" }, { review: true });
+  await rfiDemo(seB, r.p102.id, { discipline: "architectural", subject: "Pool coping stone fixing method", question: "Confirm whether the coping stones are to be mechanically fixed or bedded only.",
+    location: "Pool", drawingRevisionId: pool["1"], blockedActivity: "Pool coping installation" }, { issue: -10 });
+  await rfiDemo(seB, r.p102.id, { discipline: "landscape", subject: "Irrigation sleeve depth under the driveway", question: "Confirm the sleeve depth below the interlock paving.", location: "Driveway" },
+    { issue: -20, answer: [-16, "600 mm minimum to top of sleeve."], close: [-15, "Installed at 600 mm and inspected."] });
+  await rfiDemo(pmB, r.p103.id, { discipline: "electrical", subject: "Cable tray support spacing", question: "Specification says 1.5 m, the tray manufacturer allows 2.0 m. Which applies?",
+    location: "Zone B", drawingRevisionId: ele["0"], originatorCompanyId: mep.id }, { issue: -2 });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

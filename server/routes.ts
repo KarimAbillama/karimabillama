@@ -22,6 +22,8 @@ import * as po from "./services/purchasing.js";
 import { dashboard, drillRows, projectDrill, projectReport } from "./services/reports.js";
 import * as sub from "./services/submittals.js";
 import * as sr from "./services/siteReports.js";
+import * as rfi from "./services/rfis.js";
+import * as dwg from "./services/drawings.js";
 import { addProgressUpdate, overview, progressHistory } from "./services/overview.js";
 
 const uuid = z.string().uuid();
@@ -47,6 +49,16 @@ const submittalBody = z.object({
   projectId: uuid, type: z.enum(sub.SUBMITTAL_TYPES), title: z.string().trim().min(1).max(300), discipline: z.enum(sub.DISCIPLINES),
   specSection: optText, area: optText, subcontractorId: uuid.nullish(), consultantId: uuid.nullish(), requiredBy: isoDate.nullish(),
   itemIds: z.array(uuid).max(50).default([]),
+});
+const discipline = z.enum(sub.DISCIPLINES);
+const rfiBody = z.object({
+  projectId: uuid, discipline, subject: z.string().trim().min(1).max(300), question: z.string().trim().min(1).max(10000), location: optText,
+  drawingRevisionId: uuid.nullish(), boqRef: optText, blockedActivity: optText, originatorCompanyId: uuid.nullish(), assigneeId: uuid.nullish(),
+  recipientCompanyId: uuid.nullish(), priority: z.enum(rfi.PRIORITIES).default("normal"), costImpact: z.enum(rfi.IMPACTS).default("none"),
+  timeImpact: z.enum(rfi.IMPACTS).default("none"), responseDueDate: isoDate.nullish(),
+});
+const revisionBody = z.object({
+  revision: z.string().trim().min(1).max(20), issueDate: isoDate, purpose: z.enum(dwg.PURPOSES), transmittalRef: optText, fileRef: optText, distribution: optText, notes: optText,
 });
 const siteReportBody = z.object({
   projectId: uuid, siteId: uuid.nullish(), reportDate: isoDate, weather: optText, workDone: z.string().trim().max(5000), issues: optText,
@@ -362,6 +374,55 @@ export async function registerRoutes(app: FastifyInstance, db: DB) {
     return sub.setCodes(db, actorOf(req), idParam.parse(req.params).id, b.codes);
   });
 
+  // ───────────── RFIs ─────────────
+  app.get("/api/rfis", async (req) => {
+    const q = z.object({ projectId: uuid.optional(), status: z.string().optional(), ball: z.enum(["consultant", "edge"]).optional(), overdue: z.coerce.boolean().optional(), q: z.string().max(100).optional() }).parse(req.query);
+    return rfi.listRfis(db, actorOf(req), q);
+  });
+  app.post("/api/rfis", async (req) => rfi.createRfi(db, actorOf(req), rfiBody.parse(req.body)));
+  app.get("/api/rfis/:id", async (req) => rfi.getRfi(db, actorOf(req), idParam.parse(req.params).id));
+  app.put("/api/rfis/:id", async (req) => {
+    const b = rfiBody.omit({ projectId: true }).extend({ version: z.number().int() }).parse(req.body);
+    return rfi.updateRfi(db, actorOf(req), idParam.parse(req.params).id, b);
+  });
+  app.post("/api/rfis/:id/review", async (req) => { await rfi.sendForReview(db, actorOf(req), idParam.parse(req.params).id); return { ok: true }; });
+  app.post("/api/rfis/:id/return", async (req) => {
+    const b = z.object({ comment: z.string().trim().min(1) }).parse(req.body);
+    await rfi.returnRfi(db, actorOf(req), idParam.parse(req.params).id, b.comment);
+    return { ok: true };
+  });
+  app.post("/api/rfis/:id/issue", async (req) => {
+    const b = z.object({ issueDate: isoDate, transmittalRef: optText, responseDueDate: isoDate.nullish(), note: optText }).parse(req.body);
+    return rfi.issueRfi(db, actorOf(req), idParam.parse(req.params).id, b);
+  });
+  app.post("/api/rfis/:id/response", async (req) => {
+    const b = z.object({ responseDate: isoDate, response: z.string().trim().min(1).max(10000), responderName: optText, reference: optText }).parse(req.body);
+    await rfi.recordRfiResponse(db, actorOf(req), idParam.parse(req.params).id, b);
+    return { ok: true };
+  });
+  app.post("/api/rfis/:id/close", async (req) => {
+    const b = z.object({ closedDate: isoDate, closureNote: z.string().trim().min(1).max(5000) }).parse(req.body);
+    return rfi.closeRfi(db, actorOf(req), idParam.parse(req.params).id, b);
+  });
+  app.post("/api/rfis/:id/cancel", async (req) => {
+    const b = z.object({ reason: z.string().trim().min(1) }).parse(req.body);
+    await rfi.cancelRfi(db, actorOf(req), idParam.parse(req.params).id, b.reason);
+    return { ok: true };
+  });
+  app.get("/api/projects/:id/rfi-assignees", async (req) => rfi.rfiAssignees(db, actorOf(req), idParam.parse(req.params).id));
+
+  // ───────────── Drawing register ─────────────
+  app.get("/api/drawings", async (req) => {
+    const q = z.object({ projectId: uuid.optional(), discipline: z.string().optional(), q: z.string().max(100).optional() }).parse(req.query);
+    return dwg.listDrawings(db, actorOf(req), q);
+  });
+  app.post("/api/drawings", async (req) => {
+    const b = z.object({ projectId: uuid, number: z.string().trim().min(1).max(60), title: z.string().trim().min(1).max(300), discipline, firstRevision: revisionBody }).parse(req.body);
+    return dwg.createDrawing(db, actorOf(req), b);
+  });
+  app.get("/api/drawings/:id", async (req) => dwg.getDrawing(db, actorOf(req), idParam.parse(req.params).id));
+  app.post("/api/drawings/:id/revisions", async (req) => dwg.addRevision(db, actorOf(req), idParam.parse(req.params).id, revisionBody.parse(req.body)));
+
   // ───────────── Daily site reports ─────────────
   app.get("/api/site-reports", async (req) => {
     const q = z.object({ projectId: uuid.optional(), from: isoDate.optional(), to: isoDate.optional(), status: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).optional() }).parse(req.query);
@@ -387,7 +448,7 @@ export async function registerRoutes(app: FastifyInstance, db: DB) {
   /** Document history visible to anyone who can see the document itself. */
   app.get("/api/history/:type/:id", async (req) => {
     const a = actorOf(req);
-    const p = z.object({ type: z.enum(["material_request", "purchase_order", "goods_receipt", "stock_issue", "stock_transfer", "submittal", "site_report"]), id: uuid }).parse(req.params);
+    const p = z.object({ type: z.enum(["material_request", "purchase_order", "goods_receipt", "stock_issue", "stock_transfer", "submittal", "site_report", "rfi", "drawing"]), id: uuid }).parse(req.params);
     if (p.type === "material_request") await mr.getMr(db, a, p.id);
     else if (p.type === "purchase_order") await po.getPo(db, a, p.id);
     else if (p.type === "goods_receipt") await po.getReceipt(db, a, p.id);
@@ -395,6 +456,8 @@ export async function registerRoutes(app: FastifyInstance, db: DB) {
     else if (p.type === "stock_transfer") await inv.getTransfer(db, a, p.id);
     else if (p.type === "submittal") await sub.getSubmittal(db, a, p.id);
     else if (p.type === "site_report") await sr.getSiteReport(db, a, p.id);
+    else if (p.type === "rfi") await rfi.getRfi(db, a, p.id);
+    else if (p.type === "drawing") await dwg.getDrawing(db, a, p.id);
     else throw rule("UNKNOWN_TYPE", "Unknown type");
     return db.select({ id: auditEvents.id, at: auditEvents.at, action: auditEvents.action, details: auditEvents.details, userName: users.fullName })
       .from(auditEvents).leftJoin(users, eq(users.id, auditEvents.userId))

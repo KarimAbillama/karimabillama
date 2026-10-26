@@ -220,6 +220,41 @@ try {
     await pm.close();
   });
 
+  await step("an RFI is raised, warned about a superseded drawing, reviewed, issued, answered and closed", async () => {
+    const eng = await session("engineer.marina@demo.edge.test");
+    await eng.page.getByRole("link", { name: "New RFI" }).first().click();
+    await field(eng.page, "Location").fill("Level 2, corridor A");
+    await field(eng.page, "Subject").fill("Skirting detail at shaft walls");
+    await field(eng.page, "Question to the consultant").fill("Please confirm the skirting detail where gypsum shaft walls meet the floor finish.");
+    await field(eng.page, "Drawing").selectOption({ label: "ARC-L02-201 — Level 2 floor plan" });
+    await field(eng.page, "Revision").selectOption({ index: 3 }); // the oldest revision
+    await eng.page.getByText(/is superseded/).waitFor();
+    await field(eng.page, "Revision").selectOption({ label: "C · for construction · CURRENT for construction" });
+    await field(eng.page, "Site work held up by this").fill("Skirting installation L2");
+    await eng.page.getByRole("button", { name: "Send for internal review" }).click();
+    await eng.page.locator("h1 .badge", { hasText: /internal review/i }).waitFor();
+    const rfiUrl = eng.page.url();
+    await eng.close();
+    const pm = await session("pm.marina@demo.edge.test");
+    await pm.page.goto(rfiUrl);
+    await pm.page.getByRole("button", { name: "Issue to consultant" }).click();
+    await field(pm.page, "Transmittal no.").fill("TR-0901");
+    await pm.page.getByRole("button", { name: "Save" }).click();
+    await pm.page.getByRole("button", { name: "Record consultant's answer" }).click();
+    await field(pm.page, "The answer, as received").fill("Use a 100 mm PVC skirting with a silicone joint.");
+    await pm.page.getByRole("button", { name: "Save" }).click();
+    await pm.page.locator("h1 .badge", { hasText: /responded/i }).waitFor();
+    await pm.page.getByRole("button", { name: "Close RFI" }).click();
+    await field(pm.page, "What was done with the answer (required)").fill("Skirting ordered; site informed.");
+    await pm.page.getByRole("button", { name: "Save" }).click();
+    await pm.page.locator("h1 .badge", { hasText: /closed/i }).waitFor();
+    await pm.page.screenshot({ path: `${SHOTS}/13-rfi-closed.png`, fullPage: true });
+    await pm.page.getByRole("link", { name: "ARC-L02-201 rev C" }).click();
+    await pm.page.getByText("Build from rev C").waitFor();
+    await pm.page.screenshot({ path: `${SHOTS}/14-drawing-register.png`, fullPage: true });
+    await pm.close();
+  });
+
   await step("home dashboard on a phone", async () => {
     const { page, close } = await session("stores@demo.edge.test", { width: 390, height: 844 });
     await page.screenshot({ path: `${SHOTS}/09-home-storekeeper-phone.png`, fullPage: true });

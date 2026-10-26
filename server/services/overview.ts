@@ -9,7 +9,7 @@
 import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { DB, DbOrTx } from "../db/client.js";
 import {
-  companies, materialRequestLines, materialRequests, projectProgressUpdates, projects, purchaseOrders, siteReports,
+  companies, materialRequestLines, materialRequests, projectProgressUpdates, projects, purchaseOrders, rfis, siteReports,
   submittalRevisions, submittals, users,
 } from "../db/schema.js";
 import { type Actor, can, canAccessProject, projectScope, requirePerm, requireProject } from "../auth/actor.js";
@@ -22,6 +22,7 @@ import { myPendingApprovals } from "./approvals.js";
 import { lineFulfilment } from "./materialRequests.js";
 import { drillRows } from "./reports.js";
 import { submittalState } from "./submittals.js";
+import { rfiState } from "./rfis.js";
 
 /** PROPOSED thresholds (A-33). */
 export const RAG = {
@@ -29,6 +30,7 @@ export const RAG = {
   programmeRedBehindPct: 10,
   progressStaleDays: 14,
   submittalRedOverdueDays: 7,
+  rfiRedOverdueDays: 7,
   deliveryRedLateDays: 7,
   siteRedMissingWorkdays: 3,
   safetyLookbackDays: 30,
@@ -88,6 +90,9 @@ export async function overview(db: DbOrTx, actor: Actor) {
   const subs = none || !showSubmittals ? [] : await db.select().from(submittals).where(and(inArray(submittals.projectId, ids), sql`${submittals.status} <> 'cancelled'`));
   const revs = subs.length ? await db.select().from(submittalRevisions).where(inArray(submittalRevisions.submittalId, subs.map((s) => s.id))) : [];
 
+  const showRfis = can(actor, "rfi.view");
+  const openRfis = none || !showRfis ? [] : await db.select().from(rfis).where(and(inArray(rfis.projectId, ids), inArray(rfis.status, ["draft", "internal_review", "returned", "issued", "responded"])));
+
   // Site reports from the last 30 days (submitted or reviewed count as reported).
   const since = addDays(today, -RAG.safetyLookbackDays);
   const reports = none ? [] : await db.select({
@@ -140,6 +145,22 @@ export async function overview(db: DbOrTx, actor: Actor) {
       if (lateForSite.length) attention.push(`${lateForSite.length} submittal(s) not approved by the date site needs them`);
     }
 
+    // RFIs
+    let rfiSummary = null;
+    let rfiRag: Rag = "none";
+    if (showRfis) {
+      const mine = openRfis.filter((r) => r.projectId === p.id).map((r) => ({ r, st: rfiState(r, today) }));
+      const withConsultant = mine.filter((x) => x.st.ballInCourt === "consultant");
+      const overdue = withConsultant.filter((x) => x.st.overdue);
+      const maxOverdue = Math.max(0, ...overdue.map((x) => x.st.daysOverdue));
+      const blocking = overdue.filter((x) => x.r.blockedActivity);
+      const toClose = mine.filter((x) => x.r.status === "responded").length;
+      rfiRag = !mine.length ? "green" : maxOverdue > RAG.rfiRedOverdueDays || blocking.length ? "red" : overdue.length ? "amber" : "green";
+      rfiSummary = { open: mine.length, withConsultant: withConsultant.length, overdue: overdue.length, maxOverdueDays: maxOverdue, blocking: blocking.length, toClose, rag: rfiRag };
+      if (overdue.length) attention.push(`${overdue.length} RFI(s) overdue with the consultant (worst ${maxOverdue} days)${blocking.length ? `, ${blocking.length} holding up site work` : ""}`);
+      if (toClose) attention.push(`${toClose} answered RFI(s) to act on and close`);
+    }
+
     // Site reporting and safety
     const pr = reports.filter((x) => x.r.projectId === p.id).sort((a, b) => b.r.reportDate.localeCompare(a.r.reportDate));
     const last = pr[0];
@@ -175,8 +196,8 @@ export async function overview(db: DbOrTx, actor: Actor) {
 
     rows.push({
       project: { id: p.id, code: p.code, name: p.name, status: p.status, clientName, startDate: p.startDate, plannedEndDate: p.plannedEndDate },
-      overall: worst(programmeRag, approvalsRag, siteRag, safetyRag, supplyRag),
-      programme, approvals,
+      overall: worst(programmeRag, approvalsRag, rfiRag, siteRag, safetyRag, supplyRag),
+      programme, approvals, rfis: rfiSummary,
       site: { lastReportDate: lastDate, missingWorkdays: missing, headcount, delayDays: delays.length, delayCauses: causes, rag: siteRag },
       safety: { incidents, rag: safetyRag },
       supply: { lateDeliveries: latePos.length, worstLateDays: worstLate, uncoveredSoon: uncoveredLate, rag: supplyRag },
@@ -192,6 +213,8 @@ export async function overview(db: DbOrTx, actor: Actor) {
       headcount: rows.reduce((a, r) => a + r.site.headcount, 0),
       submittalsWithConsultant: rows.reduce((a, r) => a + (r.approvals?.withConsultant ?? 0), 0),
       submittalsOverdue: rows.reduce((a, r) => a + (r.approvals?.overdue ?? 0), 0),
+      rfisWithConsultant: rows.reduce((a, r) => a + (r.rfis?.withConsultant ?? 0), 0),
+      rfisOverdue: rows.reduce((a, r) => a + (r.rfis?.overdue ?? 0), 0),
       myApprovals: (await myPendingApprovals(db, actor)).length,
     },
     projects: rows,

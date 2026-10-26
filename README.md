@@ -17,6 +17,11 @@ once and reused: a project, supplier, item or cost code is one record shared by 
   comments, who holds it now, how many days it has been with the consultant and when the reply is due.
   Each consultant's own codes are set per project. A material cannot be ordered until its submittal is
   approved.
+- **RFIs.** Raise on site, review internally, issue to the consultant, record the answer, close.
+  Every step is kept; overdue RFIs show who must act and what site work they hold up. The consultant's
+  answer never closes an RFI or approves a variation by itself.
+- **Drawing register.** Every revision kept; the current construction revision is highlighted and
+  RFIs warn when they point to a superseded revision.
 - **Daily site reports from a phone.** People per trade and subcontractor, work done, what held work up
   and why, inspections, safety. The PM accepts or returns them; missing reports are flagged.
 - **Weekly progress.** Planned vs actual %, forecast finish and risks, entered by the PM.

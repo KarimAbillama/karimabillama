@@ -213,3 +213,7 @@ a.chip:hover { text-decoration: none; filter: brightness(0.97); }
   .money { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 0.6rem; }
   .code-row, .crew-row { grid-template-columns: 1fr 1fr; }
 }
+.response { border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; margin-bottom: 0.6rem; }
+.response:last-child { border-bottom: 0; }
+.response p { margin: 0.3rem 0 0; }
+.closure { background: var(--green-bg); color: var(--green); border-radius: 6px; padding: 0.5rem 0.7rem; margin-top: 0.6rem; }
