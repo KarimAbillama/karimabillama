@@ -13,16 +13,18 @@
  *    returned as null with a reason — never as zero.
  * Every figure has a drill-down that returns the source rows whose sum equals the figure.
  */
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { DbOrTx } from "../db/client.js";
-import { projects } from "../db/schema.js";
+import { projects, siteReports, submittalRevisions, submittals } from "../db/schema.js";
 import { type Actor, can, canAccessProject, requirePerm, requireProject } from "../auth/actor.js";
 import { businessToday } from "../lib/dates.js";
+import { lastWorkday } from "../lib/workdays.js";
 import { type Decimal, dec, m2, q4, sum } from "../lib/decimal.js";
 import { notFound, rule } from "../lib/errors.js";
 import { myPendingApprovals } from "./approvals.js";
 import { lineFulfilment } from "./materialRequests.js";
 import { listLocations, stockPosition } from "./inventory.js";
+import { submittalState } from "./submittals.js";
 
 const COMMITTED_STATUSES = sql`('approved','partially_received','received','closed')`;
 const NOT_TRACKED = "Not tracked in Phase 1";
@@ -198,6 +200,44 @@ export async function dashboard(db: DbOrTx, actor: Actor) {
       kind: "my_draft", title: `${d.status === "rejected" ? "Rejected" : "Draft"}: ${d.number}`, detail: d.status === "rejected" ? "Revise and resubmit, or cancel" : "Not yet submitted",
       due: null, overdue: false, owner: "You", projectCode: d.project_code, link: d.kind === "po" ? `/purchase-orders/${d.id}` : `/material-requests/${d.id}`,
     });
+  }
+
+  // Submittals: overdue with the consultant, or back with EDGE to revise and resubmit.
+  if (can(actor, "submittal.manage")) {
+    const subs = await db.select({ s: submittals, projectCode: projects.code }).from(submittals).innerJoin(projects, eq(projects.id, submittals.projectId))
+      .where(and(inArray(submittals.status, ["with_consultant", "revise_resubmit", "rejected"]), scopeSql("submittals.project_id")));
+    const revs = subs.length ? await db.select().from(submittalRevisions).where(inArray(submittalRevisions.submittalId, subs.map((x) => x.s.id))) : [];
+    for (const { s, projectCode } of subs) {
+      const st = submittalState(s, revs.find((r) => r.submittalId === s.id && r.revNo === s.currentRevision), today);
+      if (st.overdue) {
+        actions.push({ kind: "submittal_overdue", title: `${s.number} overdue with the consultant (${st.daysOverdue} days)`, detail: `${s.title} · chase the consultant`,
+          due: st.dueDate, overdue: true, owner: "Document controller", projectCode, link: `/submittals/${s.id}` });
+      } else if (st.ballInCourt === "edge") {
+        actions.push({ kind: "submittal_resubmit", title: `Resubmit ${s.number}`, detail: `${s.title} · returned ${s.status === "rejected" ? "rejected" : "for revision"}`,
+          due: s.requiredBy, overdue: st.lateForSite, owner: "Document controller", projectCode, link: `/submittals/${s.id}` });
+      }
+    }
+  }
+
+  // Daily site reports: yesterday's report missing on my projects, and reports waiting for my review.
+  const reportDay = lastWorkday(today);
+  if (can(actor, "sitereport.create") && !actor.allProjects && actor.projectIds.length) {
+    const done = await db.select({ projectId: siteReports.projectId }).from(siteReports)
+      .where(and(eq(siteReports.reportDate, reportDay), inArray(siteReports.projectId, actor.projectIds), inArray(siteReports.status, ["submitted", "reviewed"])));
+    const mine = await db.select({ id: projects.id, code: projects.code }).from(projects).where(and(inArray(projects.id, actor.projectIds), eq(projects.status, "active")));
+    for (const p of mine.filter((x) => !done.some((d) => d.projectId === x.id))) {
+      actions.push({ kind: "site_report_missing", title: `Daily report missing for ${reportDay}`, detail: "Write and submit the site report", due: reportDay, overdue: true,
+        owner: "Site team", projectCode: p.code, link: `/site-reports/new?project=${p.id}&date=${reportDay}` });
+    }
+  }
+  if (can(actor, "sitereport.review")) {
+    const waiting = await db.select({ id: siteReports.id, date: siteReports.reportDate, code: projects.code, createdBy: siteReports.createdBy }).from(siteReports)
+      .innerJoin(projects, eq(projects.id, siteReports.projectId))
+      .where(and(eq(siteReports.status, "submitted"), scopeSql("site_reports.project_id")));
+    for (const w of waiting.filter((x) => x.createdBy !== actor.userId)) {
+      actions.push({ kind: "site_report_review", title: `Review the daily report of ${w.date}`, detail: "Accept it or return it with a comment", due: null, overdue: false,
+        owner: "You", projectCode: w.code, link: `/site-reports/${w.id}` });
+    }
   }
 
   if (can(actor, "mr.allocate") || can(actor, "po.create")) {

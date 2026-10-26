@@ -23,6 +23,7 @@ import {
   primaryKey,
   unique,
   index,
+  uniqueIndex,
   check,
 } from "drizzle-orm/pg-core";
 
@@ -125,9 +126,13 @@ export const projects = pgTable("projects", {
   startDate: date("start_date", { mode: "string" }),
   plannedEndDate: date("planned_end_date", { mode: "string" }),
   contractValue: money("contract_value"),
+  // The consultant who reviews submittals, and how many calendar days the contract gives them (A-28).
+  consultantCompanyId: uuid("consultant_company_id").references(() => companies.id),
+  submittalReviewDays: integer("submittal_review_days").notNull().default(14),
   createdAt: createdAt(),
 }, (t) => [
   unique("projects_code_unique").on(t.code),
+  check("projects_review_days_chk", sql`${t.submittalReviewDays} between 1 and 90`),
   check("projects_status_chk", sql`${t.status} in ('planning','active','on_hold','completed','closed')`),
 ]);
 
@@ -554,4 +559,140 @@ export const stockTransferLines = pgTable("stock_transfer_lines", {
   check("stl_qty_positive", sql`${t.qtyDispatched} > 0`),
   check("stl_received_range", sql`${t.qtyReceived} is null or (${t.qtyReceived} >= 0 and ${t.qtyReceived} + coalesce(${t.qtyDiscrepancy},0) = ${t.qtyDispatched})`),
   check("stl_discrepancy_status_chk", sql`${t.discrepancyStatus} in ('none','open','written_off','found')`),
+]);
+
+// ───────────────────────────── Project control ─────────────────────────────
+// Submittals (shop drawings, material submittals, samples, mock-ups, method statements),
+// daily site reports and progress updates. They feed the owner's overview.
+
+export type SubmittalOutcome = "approved" | "approved_as_noted" | "revise_resubmit" | "rejected" | "for_information";
+export type SubmittalStatus = "draft" | "with_consultant" | "revise_resubmit" | "rejected" | "approved" | "closed" | "cancelled";
+
+/** Consultant review codes. Each consultant uses their own, so they are kept per project (A-27). */
+export const submittalCodes = pgTable("submittal_codes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
+  label: text("label").notNull(),
+  // What the code means for the contractor: whether the item may proceed or must be resubmitted.
+  outcome: text("outcome").notNull().$type<SubmittalOutcome>(),
+  sortOrder: integer("sort_order").notNull().default(0),
+}, (t) => [
+  unique("submittal_codes_project_code_unique").on(t.projectId, t.code),
+  check("submittal_codes_outcome_chk", sql`${t.outcome} in ('approved','approved_as_noted','revise_resubmit','rejected','for_information')`),
+]);
+
+export const submittals = pgTable("submittals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  number: text("number").notNull(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  type: text("type").notNull().$type<"shop_drawing" | "material" | "sample" | "mockup" | "method_statement" | "other">(),
+  title: text("title").notNull(),
+  discipline: text("discipline").notNull(),
+  specSection: text("spec_section"),
+  area: text("area"),
+  subcontractorId: uuid("subcontractor_id").references(() => companies.id),
+  consultantId: uuid("consultant_id").references(() => companies.id),
+  // Date by which approval is needed so that ordering and site work are not delayed.
+  requiredBy: date("required_by", { mode: "string" }),
+  status: text("status").notNull().$type<SubmittalStatus>(),
+  currentRevision: integer("current_revision").notNull().default(0),
+  version: integer("version").notNull().default(1),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  unique("submittals_number_unique").on(t.number),
+  index("submittals_project_idx").on(t.projectId, t.status),
+  check("submittals_type_chk", sql`${t.type} in ('shop_drawing','material','sample','mockup','method_statement','other')`),
+  check("submittals_discipline_chk", sql`${t.discipline} in ('civil','structural','architectural','mechanical','electrical','plumbing','fire','landscape','other')`),
+  check("submittals_status_chk", sql`${t.status} in ('draft','with_consultant','revise_resubmit','rejected','approved','closed','cancelled')`),
+]);
+
+/** Items a submittal covers. A PO for these items on the project needs the submittal approved (A-29). */
+export const submittalItems = pgTable("submittal_items", {
+  submittalId: uuid("submittal_id").notNull().references(() => submittals.id, { onDelete: "cascade" }),
+  itemId: uuid("item_id").notNull().references(() => items.id),
+}, (t) => [primaryKey({ columns: [t.submittalId, t.itemId] }), index("submittal_items_item_idx").on(t.itemId)]);
+
+/** One row per time the submittal goes to the consultant; the consultant's response is recorded on it. */
+export const submittalRevisions = pgTable("submittal_revisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  submittalId: uuid("submittal_id").notNull().references(() => submittals.id, { onDelete: "cascade" }),
+  revNo: integer("rev_no").notNull(),
+  submittedDate: date("submitted_date", { mode: "string" }).notNull(),
+  dueDate: date("due_date", { mode: "string" }).notNull(),
+  transmittalRef: text("transmittal_ref"),
+  notes: text("notes"),
+  submittedBy: uuid("submitted_by").notNull().references(() => users.id),
+  returnedDate: date("returned_date", { mode: "string" }),
+  codeId: uuid("code_id").references(() => submittalCodes.id),
+  outcome: text("outcome").$type<SubmittalOutcome>(),
+  consultantComments: text("consultant_comments"),
+  reviewerName: text("reviewer_name"),
+  // Mock-ups and samples: the date the consultant inspected them on site.
+  inspectionDate: date("inspection_date", { mode: "string" }),
+  recordedBy: uuid("recorded_by").references(() => users.id),
+  recordedAt: ts("recorded_at"),
+}, (t) => [
+  unique("submittal_revisions_rev_unique").on(t.submittalId, t.revNo),
+  check("submittal_revisions_response_chk", sql`(${t.returnedDate} is null) = (${t.outcome} is null) and (${t.outcome} is null) = (${t.codeId} is null)`),
+  check("submittal_revisions_dates_chk", sql`${t.dueDate} >= ${t.submittedDate} and (${t.returnedDate} is null or ${t.returnedDate} >= ${t.submittedDate})`),
+]);
+
+export const siteReports = pgTable("site_reports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  siteId: uuid("site_id").references(() => sites.id),
+  reportDate: date("report_date", { mode: "string" }).notNull(),
+  status: text("status").notNull().$type<"draft" | "submitted" | "reviewed" | "returned">(),
+  weather: text("weather"),
+  workDone: text("work_done").notNull().default(""),
+  issues: text("issues"),
+  // Main cause when work was held up that day; null = no delay.
+  delayCause: text("delay_cause").$type<"consultant" | "client" | "subcontractor" | "material" | "labour" | "equipment" | "weather" | "authority" | "other">(),
+  inspections: text("inspections"),
+  visitors: text("visitors"),
+  safetyIncidents: integer("safety_incidents").notNull().default(0),
+  safetyNotes: text("safety_notes"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  submittedAt: ts("submitted_at"),
+  reviewedBy: uuid("reviewed_by").references(() => users.id),
+  reviewedAt: ts("reviewed_at"),
+  reviewComment: text("review_comment"),
+  version: integer("version").notNull().default(1),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // One report per site per day (a project without sites has one per day).
+  uniqueIndex("site_reports_day_unique").on(t.projectId, sql`coalesce(${t.siteId}, '00000000-0000-0000-0000-000000000000'::uuid)`, t.reportDate),
+  check("site_reports_status_chk", sql`${t.status} in ('draft','submitted','reviewed','returned')`),
+  check("site_reports_delay_chk", sql`${t.delayCause} is null or ${t.delayCause} in ('consultant','client','subcontractor','material','labour','equipment','weather','authority','other')`),
+  check("site_reports_incidents_chk", sql`${t.safetyIncidents} >= 0`),
+]);
+
+/** Manpower on site that day, by trade and company (null company = EDGE's own staff). */
+export const siteReportManpower = pgTable("site_report_manpower", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  siteReportId: uuid("site_report_id").notNull().references(() => siteReports.id, { onDelete: "cascade" }),
+  trade: text("trade").notNull(),
+  companyId: uuid("company_id").references(() => companies.id),
+  headcount: integer("headcount").notNull(),
+}, (t) => [check("site_report_manpower_headcount_chk", sql`${t.headcount} > 0`)]);
+
+/** Weekly progress entered by the project manager. Kept as history: a new update never edits an old one. */
+export const projectProgressUpdates = pgTable("project_progress_updates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  asOfDate: date("as_of_date", { mode: "string" }).notNull(),
+  plannedPct: numeric("planned_pct", { precision: 5, scale: 2 }).notNull(),
+  actualPct: numeric("actual_pct", { precision: 5, scale: 2 }).notNull(),
+  forecastEndDate: date("forecast_end_date", { mode: "string" }),
+  summary: text("summary"),
+  risks: text("risks"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: createdAt(),
+}, (t) => [
+  index("project_progress_project_idx").on(t.projectId, t.asOfDate),
+  check("project_progress_pct_chk", sql`${t.plannedPct} between 0 and 100 and ${t.actualPct} between 0 and 100`),
 ]);

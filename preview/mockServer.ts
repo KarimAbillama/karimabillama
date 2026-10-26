@@ -56,16 +56,24 @@ interface Reservation { id: string; mrLineId: string; locationId: string; itemId
 interface Movement { seq: number; date: string; type: string; itemId: string; locationId: string; status: string; qty: Num; sourceType: string; sourceId: string; sourceNumber: string; projectId: string | null; costCodeId: string | null; postedBy: string; note: string | null; unitCost: Num | null; value: Num | null }
 interface Transfer { id: string; number: string; fromId: string; toId: string; status: string; dispatchDate: string; receivedDate: string | null; vehicleRef: string | null; notes: string | null; dispatchedBy: string; idem: string; lines: { id: string; itemId: string; qty: Num; mrLineId: string | null; received: Num | null; short: Num | null; discStatus: string; note: string | null }[] }
 interface Issue { id: string; number: string; idem: string }
+interface Project { id: string; code: string; name: string; status: string; contractValue: Num; clientName: string; startDate: string; plannedEndDate: string; consultantId: string | null; reviewDays: number }
+interface Partner { id: string; name: string; isSubcontractor: boolean; isConsultant: boolean }
+interface SubCode { id: string; projectId: string; code: string; label: string; outcome: string; sortOrder: number }
+interface Submittal { id: string; number: string; projectId: string; type: string; title: string; discipline: string; specSection: string | null; area: string | null; subcontractorId: string | null; consultantId: string | null; requiredBy: string | null; status: string; currentRevision: number; version: number; createdBy: string; createdAt: string; itemIds: string[] }
+interface SubRev { id: string; submittalId: string; revNo: number; submittedDate: string; dueDate: string; transmittalRef: string | null; notes: string | null; submittedBy: string; returnedDate: string | null; codeId: string | null; outcome: string | null; consultantComments: string | null; reviewerName: string | null; inspectionDate: string | null; recordedBy: string | null }
+interface SiteReport { id: string; projectId: string; siteId: string | null; reportDate: string; status: string; weather: string | null; workDone: string; issues: string | null; delayCause: string | null; inspections: string | null; visitors: string | null; safetyIncidents: number; safetyNotes: string | null; createdBy: string; submittedAt: string | null; reviewedBy: string | null; reviewedAt: string | null; reviewComment: string | null; version: number; manpower: { id: string; trade: string; companyId: string | null; headcount: number }[] }
+interface Progress { id: string; projectId: string; asOfDate: string; plannedPct: Num; actualPct: Num; forecastEndDate: string | null; summary: string | null; risks: string | null; createdBy: string; createdAt: string }
 interface Audit { id: number; at: string; userId: string | null; action: string; entityType: string; entityId: string | null; projectId: string | null; details: Record<string, unknown> | null }
 
 const db = {
-  users: [] as User[], projects: [] as { id: string; code: string; name: string; status: string; contractValue: Num }[],
+  users: [] as User[], projects: [] as Project[],
   sites: [] as { id: string; projectId: string; code: string; name: string }[], locations: [] as Location[], items: [] as Item[],
   suppliers: [] as { id: string; code: string; name: string; trn: string | null; paymentTerms: string | null }[],
   costCodes: [] as { id: string; code: string; name: string; category: string }[],
   mrs: [] as Mr[], pos: [] as Po[], approvals: [] as Approval[], receipts: [] as Receipt[], reservations: [] as Reservation[],
   movements: [] as Movement[], balances: new Map<string, Num>(), valuations: new Map<string, { avg: Num; qty: Num }>(),
   transfers: [] as Transfer[], issues: [] as Issue[], audit: [] as Audit[],
+  partners: [] as Partner[], codes: [] as SubCode[], submittals: [] as Submittal[], revisions: [] as SubRev[], siteReports: [] as SiteReport[], progress: [] as Progress[],
 };
 let session: string | null = null;
 
@@ -307,6 +315,8 @@ function submitPo(a: Actor, id: string, version?: number) {
   need(a, "po.create");
   if (p.status !== "draft") throw rule("INVALID_STATE", "Only a draft can be submitted.");
   if (version !== undefined && version !== p.version) throw conflict();
+  const blocked = blockingSubmittals(p.projectId, [...new Set(p.lines.map((l) => l.itemId))]);
+  if (blocked.length) throw rule("SUBMITTAL_NOT_APPROVED", `Not approved by the consultant yet: ${blocked.map((b) => `${b.itemCode} (${b.numbers.join(", ")})`).join("; ")}. Order once the submittal is approved.`);
   p.status = "pending_approval"; p.version++;
   startApproval("purchase_order", p.id, p.revision, a.user.id, subtotal(p));
   audit(a, "po.submit", "purchase_order", p.id, p.projectId, { number: p.number, subtotal: m2(subtotal(p)) });
@@ -613,10 +623,220 @@ function dashboard(a: Actor) {
   }
   if (can(a, "stock.view") && can(a, "mr.allocate")) for (const s of stockRows(a, {}).filter((x) => x.belowReorder))
     actions.push({ kind: "low_stock", title: `Low stock: ${s.itemCode} at ${s.locationCode}`, detail: `${qtyText(Number(s.available))} ${s.baseUnit} available, reorder level ${qtyText(s.reorderLevel ?? 0)}`, due: null, overdue: false, owner: "Stores", projectCode: null, link: `/stock?item=${s.itemId}` });
+  if (can(a, "submittal.manage")) for (const s of db.submittals.filter((x) => ["with_consultant", "revise_resubmit", "rejected"].includes(x.status) && inScope(a, x.projectId))) {
+    const st = subState(s, t);
+    if (st.overdue) actions.push({ kind: "submittal_overdue", title: `${s.number} overdue with the consultant (${st.daysOverdue} days)`, detail: `${s.title} · chase the consultant`, due: st.dueDate, overdue: true, owner: "Document controller", projectCode: project(s.projectId).code, link: `/submittals/${s.id}` });
+    else if (st.ballInCourt === "edge") actions.push({ kind: "submittal_resubmit", title: `Resubmit ${s.number}`, detail: `${s.title} · returned ${s.status === "rejected" ? "rejected" : "for revision"}`, due: s.requiredBy, overdue: st.lateForSite, owner: "Document controller", projectCode: project(s.projectId).code, link: `/submittals/${s.id}` });
+  }
+  const reportDay = lastWorkday(t);
+  if (can(a, "sitereport.create") && !a.all) for (const p of db.projects.filter((x) => a.user.projects.includes(x.id) && x.status === "active")) {
+    if (!db.siteReports.some((r) => r.projectId === p.id && r.reportDate === reportDay && ["submitted", "reviewed"].includes(r.status)))
+      actions.push({ kind: "site_report_missing", title: `Daily report missing for ${reportDay}`, detail: "Write and submit the site report", due: reportDay, overdue: true, owner: "Site team", projectCode: p.code, link: `/site-reports/new?project=${p.id}&date=${reportDay}` });
+  }
+  if (can(a, "sitereport.review")) for (const r of db.siteReports.filter((x) => x.status === "submitted" && inScope(a, x.projectId) && x.createdBy !== a.user.id))
+    actions.push({ kind: "site_report_review", title: `Review the daily report of ${r.reportDate}`, detail: "Accept it or return it with a comment", due: null, overdue: false, owner: "You", projectCode: project(r.projectId).code, link: `/site-reports/${r.id}` });
   actions.sort((x, y) => Number(y.overdue) - Number(x.overdue) || (x.due ?? "9999").localeCompare(y.due ?? "9999"));
   return { today: t, actions, projects: db.projects.filter((p) => inScope(a, p.id)).map(({ id, code, name, status }) => ({ id, code, name, status })) };
 }
 const me = (a: Actor) => ({ userId: a.user.id, email: a.user.email, fullName: a.user.fullName, roles: a.user.roles, permissions: [...a.perms].sort(), allProjects: a.all });
+
+// ───────────── project control: submittals, site reports, progress, overview ─────────────
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+const weekday = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+const WORKDAYS = [1, 2, 3, 4, 5, 6];
+function lastWorkday(t: string) { let d = addDays(t, -1); while (!WORKDAYS.includes(weekday(d))) d = addDays(d, -1); return d; }
+function workdaysBetween(from: string, to: string) { let n = 0; for (let d = addDays(from, 1); d <= to; d = addDays(d, 1)) if (WORKDAYS.includes(weekday(d))) n++; return n; }
+const DONE_SUB = ["approved", "closed", "cancelled"];
+const STATUS_AFTER: Record<string, string> = { approved: "approved", approved_as_noted: "approved", revise_resubmit: "revise_resubmit", rejected: "rejected", for_information: "closed" };
+const curRev = (s: Submittal) => db.revisions.find((r) => r.submittalId === s.id && r.revNo === s.currentRevision);
+function subState(s: Submittal, t = today()) {
+  const cur = curRev(s);
+  const withC = s.status === "with_consultant";
+  const daysOverdue = withC && cur ? Math.max(0, daysBetween(cur.dueDate, t)) : 0;
+  return { ballInCourt: withC ? "consultant" : DONE_SUB.includes(s.status) ? null : "edge", daysWithConsultant: withC && cur ? daysBetween(cur.submittedDate, t) : null,
+    dueDate: withC ? cur?.dueDate ?? null : null, daysOverdue, overdue: daysOverdue > 0, lateForSite: !!s.requiredBy && s.requiredBy < t && !DONE_SUB.includes(s.status) };
+}
+function blockingSubmittals(projectId: string, itemIds: string[]) {
+  const out: { itemCode: string; numbers: string[] }[] = [];
+  for (const itemId of itemIds) {
+    const mine = db.submittals.filter((s) => s.projectId === projectId && s.status !== "cancelled" && s.itemIds.includes(itemId));
+    if (!mine.length || mine.some((s) => s.status === "approved" || s.status === "closed")) continue;
+    out.push({ itemCode: item(itemId).code, numbers: mine.map((s) => `${s.number} (${s.status.replace(/_/g, " ")})`) });
+  }
+  return out;
+}
+const getSub = (a: Actor, id: string) => { need(a, "submittal.view"); const s = byId(db.submittals, id, "Submittal"); needProject(a, s.projectId, "Submittal"); return s; };
+function subRow(s: Submittal) {
+  const pr = project(s.projectId);
+  const last = db.revisions.filter((r) => r.submittalId === s.id && r.outcome).sort((x, y) => y.revNo - x.revNo)[0];
+  return { ...s, projectCode: pr.code, projectName: pr.name, consultantName: db.partners.find((c) => c.id === s.consultantId)?.name ?? null,
+    subcontractorName: db.partners.find((c) => c.id === s.subcontractorId)?.name ?? null, lastOutcome: last?.outcome ?? null, ...subState(s) };
+}
+type SubIn = { projectId: string; type: string; title: string; discipline: string; specSection?: string | null; area?: string | null; subcontractorId?: string | null; consultantId?: string | null; requiredBy?: string | null; itemIds?: string[] };
+function createSub(a: Actor, b: SubIn) {
+  need(a, "submittal.manage"); needProject(a, b.projectId, "Project");
+  if (!b.title?.trim()) throw rule("TITLE_REQUIRED", "Give the submittal a title.");
+  const s: Submittal = { id: newId("sub"), number: nextNumber("SUB"), projectId: b.projectId, type: b.type, title: b.title.trim(), discipline: b.discipline, specSection: b.specSection || null,
+    area: b.area || null, subcontractorId: b.subcontractorId || null, consultantId: b.consultantId || project(b.projectId).consultantId, requiredBy: b.requiredBy || null, status: "draft",
+    currentRevision: 0, version: 1, createdBy: a.user.id, createdAt: nowIso(), itemIds: [...new Set(b.itemIds ?? [])] };
+  db.submittals.push(s);
+  audit(a, "submittal.created", "submittal", s.id, s.projectId, { number: s.number, title: s.title });
+  return s;
+}
+function sendSub(a: Actor, id: string, b: { submittedDate: string; transmittalRef?: string | null; notes?: string | null }) {
+  need(a, "submittal.manage");
+  const s = getSub(a, id);
+  if (!["draft", "revise_resubmit", "rejected"].includes(s.status)) throw rule("INVALID_STATE", "Only a draft, or a submittal returned for resubmission, can be sent to the consultant.");
+  if (b.submittedDate > today()) throw rule("FUTURE_DATE", "The submission date cannot be in the future.");
+  const last = curRev(s);
+  if (last?.returnedDate && b.submittedDate < last.returnedDate) throw rule("DATE_ORDER", "A resubmission cannot be dated before the consultant returned the previous revision.");
+  const revNo = s.status === "draft" ? s.currentRevision : s.currentRevision + 1;
+  const dueDate = addDays(b.submittedDate, project(s.projectId).reviewDays);
+  db.revisions.push({ id: newId("rev"), submittalId: s.id, revNo, submittedDate: b.submittedDate, dueDate, transmittalRef: b.transmittalRef || null, notes: b.notes || null, submittedBy: a.user.id,
+    returnedDate: null, codeId: null, outcome: null, consultantComments: null, reviewerName: null, inspectionDate: null, recordedBy: null });
+  Object.assign(s, { status: "with_consultant", currentRevision: revNo, version: s.version + 1 });
+  audit(a, "submittal.submitted", "submittal", s.id, s.projectId, { number: s.number, revision: revNo, dueDate });
+}
+function respondSub(a: Actor, id: string, b: { codeId: string; returnedDate: string; consultantComments?: string | null; reviewerName?: string | null; inspectionDate?: string | null }) {
+  need(a, "submittal.manage");
+  const s = getSub(a, id);
+  if (s.status !== "with_consultant") throw rule("INVALID_STATE", "This submittal is not waiting for a consultant response.");
+  const code = db.codes.find((c) => c.id === b.codeId && c.projectId === s.projectId);
+  if (!code) throw rule("UNKNOWN_CODE", "Choose one of this project's consultant codes.");
+  const rev = curRev(s)!;
+  if (b.returnedDate < rev.submittedDate) throw rule("DATE_ORDER", "The response cannot be dated before the submission.");
+  if (b.returnedDate > today()) throw rule("FUTURE_DATE", "The response date cannot be in the future.");
+  if ((code.outcome === "revise_resubmit" || code.outcome === "rejected") && !b.consultantComments?.trim()) throw rule("COMMENTS_REQUIRED", "Record the consultant's comments so the team knows what to change.");
+  Object.assign(rev, { returnedDate: b.returnedDate, codeId: code.id, outcome: code.outcome, consultantComments: b.consultantComments || null, reviewerName: b.reviewerName || null, inspectionDate: b.inspectionDate || null, recordedBy: a.user.id });
+  Object.assign(s, { status: STATUS_AFTER[code.outcome], version: s.version + 1 });
+  audit(a, "submittal.response", "submittal", s.id, s.projectId, { number: s.number, revision: rev.revNo, code: code.code });
+}
+function setCodes(a: Actor, projectId: string, codes: { code: string; label: string; outcome: string }[]) {
+  need(a, "submittal.manage"); needProject(a, projectId, "Project");
+  if (!codes.length) throw rule("NO_CODES", "Add at least one code.");
+  const keys = codes.map((c) => c.code.trim());
+  if (keys.some((k) => !k) || new Set(keys).size !== keys.length) throw rule("DUPLICATE_CODE", "Each code must be filled in and appear only once.");
+  if (!codes.some((c) => c.outcome === "approved" || c.outcome === "approved_as_noted")) throw rule("NO_APPROVAL_CODE", "At least one code must mean approved.");
+  const existing = db.codes.filter((c) => c.projectId === projectId);
+  for (const old of existing) {
+    const next = codes.find((c) => c.code.trim() === old.code);
+    if (db.revisions.some((r) => r.codeId === old.id) && (!next || next.outcome !== old.outcome)) throw rule("CODE_IN_USE", `Code ${old.code} is already used on a consultant response, so it cannot be removed or given a different meaning.`);
+  }
+  for (const [i, c] of codes.entries()) {
+    const old = existing.find((x) => x.code === c.code.trim());
+    if (old) Object.assign(old, { label: c.label.trim(), outcome: c.outcome, sortOrder: i });
+    else db.codes.push({ id: newId("code"), projectId, code: c.code.trim(), label: c.label.trim(), outcome: c.outcome, sortOrder: i });
+  }
+  db.codes = db.codes.filter((c) => c.projectId !== projectId || keys.includes(c.code));
+  return db.codes.filter((c) => c.projectId === projectId).sort((x, y) => x.sortOrder - y.sortOrder);
+}
+
+type ReportIn = { projectId: string; siteId?: string | null; reportDate: string; weather?: string | null; workDone: string; issues?: string | null; delayCause?: string | null; inspections?: string | null; visitors?: string | null; safetyIncidents?: number; safetyNotes?: string | null; manpower: { trade: string; companyId?: string | null; headcount: number }[] };
+function checkReport(b: Omit<ReportIn, "reportDate" | "projectId">) {
+  for (const m of b.manpower) if (!m.trade?.trim() || !(m.headcount > 0)) throw rule("INVALID_HEADCOUNT", "Each manpower line needs a trade and a headcount above zero.");
+  if ((b.safetyIncidents ?? 0) > 0 && !b.safetyNotes?.trim()) throw rule("SAFETY_NOTES_REQUIRED", "Describe the safety incident.");
+  if (b.delayCause && !b.issues?.trim()) throw rule("ISSUES_REQUIRED", "Describe what held the work up.");
+}
+const reportFields = (b: Omit<ReportIn, "reportDate" | "projectId">) => ({ weather: b.weather || null, workDone: (b.workDone ?? "").trim(), issues: b.issues || null, delayCause: b.delayCause || null,
+  inspections: b.inspections || null, visitors: b.visitors || null, safetyIncidents: b.safetyIncidents ?? 0, safetyNotes: b.safetyNotes || null,
+  manpower: b.manpower.map((m) => ({ id: newId("mp"), trade: m.trade.trim(), companyId: m.companyId || null, headcount: m.headcount })) });
+function createReport(a: Actor, b: ReportIn) {
+  need(a, "sitereport.create"); needProject(a, b.projectId, "Project");
+  const t = today();
+  if (b.reportDate > t) throw rule("FUTURE_DATE", "A daily report cannot be for a future date.");
+  if (b.reportDate < addDays(t, -7)) throw rule("TOO_LATE", "Daily reports can be written up to 7 days late.");
+  if (db.siteReports.some((r) => r.projectId === b.projectId && (r.siteId ?? "") === (b.siteId ?? "") && r.reportDate === b.reportDate)) throw rule("REPORT_EXISTS", "There is already a report for this site and day. Open it instead.");
+  checkReport(b);
+  const r: SiteReport = { id: newId("rep"), projectId: b.projectId, siteId: b.siteId || null, reportDate: b.reportDate, status: "draft", createdBy: a.user.id, submittedAt: null, reviewedBy: null, reviewedAt: null, reviewComment: null, version: 1, ...reportFields(b) };
+  db.siteReports.push(r);
+  audit(a, "sitereport.created", "site_report", r.id, r.projectId, { date: r.reportDate });
+  return r;
+}
+const getReport = (a: Actor, id: string) => { need(a, "project.view"); const r = byId(db.siteReports, id, "Site report"); needProject(a, r.projectId, "Site report"); return r; };
+function submitReport(a: Actor, id: string) {
+  need(a, "sitereport.create");
+  const r = getReport(a, id);
+  if (!["draft", "returned"].includes(r.status)) throw rule("INVALID_STATE", "This report has already been submitted.");
+  if (!r.workDone.trim()) throw rule("WORK_REQUIRED", "Say what work was done (or why none was done).");
+  Object.assign(r, { status: "submitted", submittedAt: nowIso(), version: r.version + 1 });
+  audit(a, "sitereport.submitted", "site_report", r.id, r.projectId, { date: r.reportDate });
+}
+function reviewReport(a: Actor, id: string, decision: string, comment?: string | null) {
+  need(a, "sitereport.review");
+  const r = getReport(a, id);
+  if (r.status !== "submitted") throw rule("INVALID_STATE", "Only a submitted report can be reviewed.");
+  if (r.createdBy === a.user.id) throw rule("OWN_REPORT", "You cannot review a report you wrote.");
+  if (decision === "return" && !comment?.trim()) throw rule("COMMENT_REQUIRED", "Say what needs to be corrected.");
+  Object.assign(r, { status: decision === "accept" ? "reviewed" : "returned", reviewedBy: a.user.id, reviewedAt: nowIso(), reviewComment: comment || null, version: r.version + 1 });
+  audit(a, decision === "accept" ? "sitereport.accepted" : "sitereport.returned", "site_report", r.id, r.projectId, { date: r.reportDate });
+}
+const headcountOf = (r: SiteReport) => r.manpower.reduce((x, m) => x + m.headcount, 0);
+function addProgress(a: Actor, projectId: string, b: { asOfDate: string; plannedPct: string; actualPct: string; forecastEndDate?: string | null; summary?: string | null; risks?: string | null }) {
+  need(a, "progress.update"); needProject(a, projectId, "Project");
+  if (b.asOfDate > today()) throw rule("FUTURE_DATE", "Progress cannot be reported for a future date.");
+  const pl = Number(b.plannedPct), ac = Number(b.actualPct);
+  if (![pl, ac].every((v) => v >= 0 && v <= 100)) throw rule("INVALID_PCT", "Percentages must be between 0 and 100.");
+  db.progress.push({ id: newId("prg"), projectId, asOfDate: b.asOfDate, plannedPct: pl, actualPct: ac, forecastEndDate: b.forecastEndDate || null, summary: b.summary || null, risks: b.risks || null, createdBy: a.user.id, createdAt: nowIso() });
+  audit(a, "progress.updated", "project", projectId, projectId, { planned: pl, actual: ac });
+}
+type Rag = "red" | "amber" | "green" | "none";
+const worstRag = (...r: Rag[]): Rag => (r.includes("red") ? "red" : r.includes("amber") ? "amber" : r.includes("green") ? "green" : "none");
+function overview(a: Actor) {
+  need(a, "report.view");
+  const t = today(), expected = lastWorkday(t), since = addDays(t, -30);
+  const rows = db.projects.filter((p) => inScope(a, p.id) && ["planning", "active", "on_hold"].includes(p.status)).map((p) => {
+    const attention: string[] = [];
+    const pu = db.progress.filter((u) => u.projectId === p.id).sort((x, y) => y.asOfDate.localeCompare(x.asOfDate) || y.createdAt.localeCompare(x.createdAt))[0];
+    let programme = null; let progRag: Rag = "none";
+    if (pu) {
+      const variance = minus(pu.actualPct, pu.plannedPct), stale = daysBetween(pu.asOfDate, t) > 14, lateFinish = !!pu.forecastEndDate && pu.forecastEndDate > p.plannedEndDate;
+      progRag = variance <= -10 || lateFinish ? "red" : variance <= -3 || stale ? "amber" : "green";
+      programme = { asOf: pu.asOfDate, plannedPct: m2(pu.plannedPct), actualPct: m2(pu.actualPct), variancePct: m2(variance), forecastEndDate: pu.forecastEndDate, plannedEndDate: p.plannedEndDate, lateFinish, stale, summary: pu.summary, risks: pu.risks, rag: progRag };
+      if (variance < 0) attention.push(`Programme: ${pu.actualPct}% done vs ${pu.plannedPct}% planned`);
+      if (lateFinish) attention.push(`Forecast finish ${pu.forecastEndDate}, after the planned ${p.plannedEndDate}`);
+      if (stale) attention.push(`Progress not updated since ${pu.asOfDate}`);
+    } else attention.push("No progress update recorded yet");
+    let approvals = null; let apprRag: Rag = "none";
+    if (can(a, "submittal.view")) {
+      const mine = db.submittals.filter((s) => s.projectId === p.id && s.status !== "cancelled").map((s) => ({ s, st: subState(s, t) }));
+      const withC = mine.filter((x) => x.st.ballInCourt === "consultant"), overdue = withC.filter((x) => x.st.overdue), maxOver = Math.max(0, ...overdue.map((x) => x.st.daysOverdue));
+      const toResubmit = mine.filter((x) => ["revise_resubmit", "rejected"].includes(x.s.status)), late = mine.filter((x) => x.st.lateForSite);
+      apprRag = !mine.length ? "none" : late.length || maxOver > 7 ? "red" : overdue.length || toResubmit.length ? "amber" : "green";
+      approvals = { total: mine.length, withConsultant: withC.length, overdue: overdue.length, maxOverdueDays: maxOver, toResubmit: toResubmit.length, lateForSite: late.length, approved: mine.filter((x) => x.s.status === "approved").length, rag: apprRag };
+      if (overdue.length) attention.push(`${overdue.length} submittal(s) overdue with the consultant (worst ${maxOver} days)`);
+      if (toResubmit.length) attention.push(`${toResubmit.length} submittal(s) to revise and resubmit`);
+      if (late.length) attention.push(`${late.length} submittal(s) not approved by the date site needs them`);
+    }
+    const pr = db.siteReports.filter((r) => r.projectId === p.id && r.reportDate >= since && ["submitted", "reviewed"].includes(r.status)).sort((x, y) => y.reportDate.localeCompare(x.reportDate));
+    const lastDate = pr[0]?.reportDate ?? null;
+    const missing = lastDate ? workdaysBetween(lastDate, expected) : workdaysBetween(since, expected);
+    const headcount = pr.filter((r) => r.reportDate === lastDate).reduce((x, r) => x + headcountOf(r), 0);
+    const delays = pr.filter((r) => r.reportDate > addDays(t, -7) && r.delayCause);
+    const causes = [...new Set(delays.map((r) => r.delayCause!))];
+    const incidents = pr.reduce((x, r) => x + r.safetyIncidents, 0);
+    const siteRag: Rag = p.status !== "active" ? "none" : missing >= 3 ? "red" : missing > 0 || delays.length ? "amber" : "green";
+    const safetyRag: Rag = !pr.length ? "none" : incidents > 0 ? "red" : "green";
+    if (p.status === "active" && missing > 0) attention.push(lastDate ? `No site report since ${lastDate}` : "No site reports in the last 30 days");
+    if (delays.length) attention.push(`Work held up on ${delays.length} day(s) this week: ${causes.join(", ")}`);
+    if (incidents) attention.push(`${incidents} safety incident(s) in the last 30 days`);
+    const latePos = db.pos.filter((o) => o.projectId === p.id && ["approved", "partially_received"].includes(o.status)).map((o) => o.promisedDate ?? o.requiredDate).filter((d): d is string => !!d && d < t);
+    const worstLate = Math.max(0, ...latePos.map((d) => daysBetween(d, t)));
+    const uncoveredSoon = db.mrs.filter((m) => m.projectId === p.id && m.status === "approved" && m.requiredDate <= addDays(t, 3)).flatMap((m) => m.lines).filter((l) => fulfilment(l.id).uncovered > 0).length;
+    const supplyRag: Rag = worstLate > 7 ? "red" : latePos.length || uncoveredSoon ? "amber" : "green";
+    if (latePos.length) attention.push(`${latePos.length} late deliveries (worst ${worstLate} days)`);
+    if (uncoveredSoon) attention.push(`${uncoveredSoon} material request line(s) needed within 3 days and not covered`);
+    const money = can(a, "cost.view") ? { contractValue: m2(p.contractValue), committed: m2(sum(drillRows(p.id, "committed").map((r) => r.value))), issuedCost: m2(sum(drillRows(p.id, "issued").map((r) => r.value))), notTracked: ["certified", "paid", "variations", "retention"] } : null;
+    return { project: { id: p.id, code: p.code, name: p.name, status: p.status, clientName: p.clientName, startDate: p.startDate, plannedEndDate: p.plannedEndDate },
+      overall: worstRag(progRag, apprRag, siteRag, safetyRag, supplyRag), programme, approvals,
+      site: { lastReportDate: lastDate, missingWorkdays: missing, headcount, delayDays: delays.length, delayCauses: causes, rag: siteRag },
+      safety: { incidents, rag: safetyRag }, supply: { lateDeliveries: latePos.length, worstLateDays: worstLate, uncoveredSoon, rag: supplyRag }, money, attention };
+  });
+  const rank = { red: 0, amber: 1, green: 2, none: 3 };
+  rows.sort((x, y) => rank[x.overall] - rank[y.overall] || x.project.code.localeCompare(y.project.code));
+  return { today: t, expectedReportDay: expected, totals: { projects: rows.length, red: rows.filter((r) => r.overall === "red").length, amber: rows.filter((r) => r.overall === "amber").length,
+    headcount: rows.reduce((x, r) => x + r.site.headcount, 0), submittalsWithConsultant: rows.reduce((x, r) => x + (r.approvals?.withConsultant ?? 0), 0),
+    submittalsOverdue: rows.reduce((x, r) => x + (r.approvals?.overdue ?? 0), 0), myApprovals: myPending(a).length }, projects: rows };
+}
 
 // ───────────── routing ─────────────
 type Handler = (a: Actor, p: Record<string, string>, q: URLSearchParams, body: any) => unknown; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -634,6 +854,7 @@ route("GET", "/api/reference", (a) => ({
   costCodes: db.costCodes,
   units: ["pcs", "box", "bag", "pallet", "roll", "drum", "m", "m2", "m3", "l", "kg", "t"].map((code) => ({ code, name: code, dimension: "" })),
   vatCodes: Object.entries(VAT_CODES).map(([code, v]) => ({ code, label: v.label, rate: v.rate })), vatVerified: VAT_VERIFIED,
+  partners: db.partners,
 }));
 route("GET", "/api/items", () => db.items.map((i) => ({ id: i.id, code: i.code, description: i.description, category: i.category, baseUnit: i.baseUnit, purchaseUnit: i.purchaseUnit,
   conversions: i.conversions.map((c) => ({ unitCode: c.unitCode, baseUnitsPerUnit: q4(c.factor) })) })));
@@ -766,6 +987,71 @@ route("GET", "/api/audit", (a) => {
 });
 route("GET", "/api/history/:type/:id", (a, p) => db.audit.filter((r) => r.entityType === p.type && r.entityId === p.id && inScope(a, r.projectId)).map((r) => ({ id: r.id, at: r.at, action: r.action, details: r.details, userName: userName(r.userId) })));
 
+route("GET", "/api/overview", (a) => overview(a));
+route("POST", "/api/projects/:id/progress", (a, p, _q, b) => { addProgress(a, p.id, b); return { ok: true }; });
+route("GET", "/api/submittals", (a, _p, q) => {
+  need(a, "submittal.view");
+  return db.submittals.filter((s) => inScope(a, s.projectId) && (!q.get("projectId") || s.projectId === q.get("projectId")) && (!q.get("type") || s.type === q.get("type")) && (!q.get("status") || s.status === q.get("status")))
+    .slice().reverse().map(subRow).filter((r) => (!q.get("ball") || r.ballInCourt === q.get("ball")) && (q.get("overdue") !== "true" || r.overdue || r.lateForSite));
+});
+route("POST", "/api/submittals", (a, _p, _q, b) => createSub(a, b));
+route("GET", "/api/submittals/:id", (a, p) => {
+  const s = getSub(a, p.id);
+  return { ...subRow(s), creatorName: userName(s.createdBy), items: s.itemIds.map((i) => ({ id: i, code: item(i).code, description: item(i).description })),
+    revisions: db.revisions.filter((r) => r.submittalId === s.id).sort((x, y) => y.revNo - x.revNo).map((r) => {
+      const c = db.codes.find((x) => x.id === r.codeId);
+      return { ...r, code: c?.code ?? null, codeLabel: c?.label ?? null, submittedByName: userName(r.submittedBy), recordedByName: userName(r.recordedBy) };
+    }),
+    codes: db.codes.filter((c) => c.projectId === s.projectId).sort((x, y) => x.sortOrder - y.sortOrder) };
+});
+route("PUT", "/api/submittals/:id", (a, p, _q, b) => {
+  need(a, "submittal.manage");
+  const s = getSub(a, p.id);
+  if (DONE_SUB.includes(s.status)) throw rule("INVALID_STATE", "Approved, closed or cancelled submittals cannot be edited.");
+  if (b.version !== s.version) throw conflict();
+  Object.assign(s, { type: b.type, title: b.title, discipline: b.discipline, specSection: b.specSection || null, area: b.area || null, subcontractorId: b.subcontractorId || null,
+    consultantId: b.consultantId || s.consultantId, requiredBy: b.requiredBy || null, itemIds: [...new Set((b.itemIds ?? []) as string[])], version: s.version + 1 });
+  audit(a, "submittal.updated", "submittal", s.id, s.projectId, { number: s.number });
+  return { id: s.id, version: s.version };
+});
+route("POST", "/api/submittals/:id/submit", (a, p, _q, b) => { sendSub(a, p.id, b); return { ok: true }; });
+route("POST", "/api/submittals/:id/response", (a, p, _q, b) => { respondSub(a, p.id, b); return { ok: true }; });
+route("POST", "/api/submittals/:id/cancel", (a, p, _q, b) => {
+  need(a, "submittal.manage");
+  const s = getSub(a, p.id);
+  if (DONE_SUB.includes(s.status)) throw rule("INVALID_STATE", "This submittal is already approved, closed or cancelled.");
+  s.status = "cancelled"; s.version++;
+  audit(a, "submittal.cancelled", "submittal", s.id, s.projectId, { number: s.number, reason: b?.reason });
+  return { ok: true };
+});
+route("GET", "/api/projects/:id/submittal-codes", (a, p) => { need(a, "submittal.view"); needProject(a, p.id, "Project"); return db.codes.filter((c) => c.projectId === p.id).sort((x, y) => x.sortOrder - y.sortOrder); });
+route("PUT", "/api/projects/:id/submittal-codes", (a, p, _q, b) => setCodes(a, p.id, b.codes));
+route("GET", "/api/site-reports", (a, _p, q) => {
+  need(a, "project.view");
+  return db.siteReports.filter((r) => inScope(a, r.projectId) && (!q.get("projectId") || r.projectId === q.get("projectId")) && (!q.get("from") || r.reportDate >= q.get("from")!))
+    .sort((x, y) => y.reportDate.localeCompare(x.reportDate) || project(x.projectId).code.localeCompare(project(y.projectId).code))
+    .map((r) => ({ id: r.id, projectId: r.projectId, projectCode: project(r.projectId).code, siteName: db.sites.find((s) => s.id === r.siteId)?.name ?? null, reportDate: r.reportDate, status: r.status,
+      headcount: headcountOf(r), delayCause: r.delayCause, safetyIncidents: r.safetyIncidents, authorName: userName(r.createdBy), summary: r.workDone.slice(0, 140) }));
+});
+route("POST", "/api/site-reports", (a, _p, _q, b) => { const r = createReport(a, b); return { id: r.id, version: r.version }; });
+route("GET", "/api/site-reports/:id", (a, p) => {
+  const r = getReport(a, p.id), pr = project(r.projectId);
+  return { ...r, projectCode: pr.code, projectName: pr.name, siteName: db.sites.find((s) => s.id === r.siteId)?.name ?? null, authorName: userName(r.createdBy), reviewerName: userName(r.reviewedBy),
+    manpower: r.manpower.map((m) => ({ ...m, companyName: db.partners.find((c) => c.id === m.companyId)?.name ?? null })), totalHeadcount: headcountOf(r) };
+});
+route("PUT", "/api/site-reports/:id", (a, p, _q, b) => {
+  need(a, "sitereport.create");
+  const r = getReport(a, p.id);
+  if (!["draft", "returned"].includes(r.status)) throw rule("INVALID_STATE", "Only a draft or returned report can be edited.");
+  if (b.version !== r.version) throw conflict();
+  checkReport(b);
+  Object.assign(r, { siteId: b.siteId ?? r.siteId, ...reportFields(b), version: r.version + 1 });
+  audit(a, "sitereport.updated", "site_report", r.id, r.projectId, { date: r.reportDate });
+  return { id: r.id, version: r.version };
+});
+route("POST", "/api/site-reports/:id/submit", (a, p) => { submitReport(a, p.id); return { ok: true }; });
+route("POST", "/api/site-reports/:id/review", (a, p, _q, b) => { reviewReport(a, p.id, b.decision, b.comment); return { ok: true }; });
+
 export const DEMO_PASSWORD = "Demo@2026!";
 
 /** Answers one API call the way the real server would (status code + JSON body). */
@@ -812,12 +1098,22 @@ export function seed() {
   sup("SUP-DEMO-04", "Oasis Electrical Trading (Demo)", null, "30 days");
   const supLand = sup("SUP-DEMO-05", "Green Landscape Supplies (Demo)", null, "Cash on delivery");
 
-  const proj = (code: string, name: string, contractValue: Num) => { const p = { id: newId("prj"), code, name, status: "active", contractValue }; db.projects.push(p); return p; };
-  const p101 = proj("DEMO-101", "Marina Residential Tower — Interior Fit-out (Demo)", 18500000);
-  const p102 = proj("DEMO-102", "Palm Grove Villa — Landscape, Hardscape & Pool (Demo)", 2750000);
-  const p103 = proj("DEMO-103", "Al Quoz Warehouse — MEP Package (Demo)", 6200000);
+  const partner = (name: string, isSubcontractor: boolean, isConsultant: boolean) => { const c = { id: newId("co"), name, isSubcontractor, isConsultant }; db.partners.push(c); return c; };
+  const atlas = partner("Atlas Engineering Consultants (Demo)", false, true);
+  const coastline = partner("Coastline Landscape Architects (Demo)", false, true);
+  const mep = partner("Al Noor Electromechanical (Demo)", true, false);
+  const block = partner("Pioneer Blockwork Contracting (Demo)", true, false);
+  const land = partner("Desert Rose Landscaping (Demo)", true, false);
+  const alu = partner("Gulf Aluminium & Glazing (Demo)", true, false);
+  const proj = (code: string, name: string, contractValue: Num, clientName: string, start: number, end: number, consultantId: string) => {
+    const p = { id: newId("prj"), code, name, status: "active", contractValue, clientName, startDate: addDays(t, start), plannedEndDate: addDays(t, end), consultantId, reviewDays: 14 };
+    db.projects.push(p); return p;
+  };
+  const p101 = proj("DEMO-101", "Marina Residential Tower — Interior Fit-out (Demo)", 18500000, "Marina Heights Developments (Demo Client)", -120, 240, atlas.id);
+  const p102 = proj("DEMO-102", "Palm Grove Villa — Landscape, Hardscape & Pool (Demo)", 2750000, "Palm Grove Private Owner (Demo Client)", -60, 150, coastline.id);
+  const p103 = proj("DEMO-103", "Al Quoz Warehouse — MEP Package (Demo)", 6200000, "Al Quoz Logistics Park (Demo Client)", -20, 200, atlas.id);
   const site = (projectId: string, code: string, name: string) => { const s = { id: newId("site"), projectId, code, name }; db.sites.push(s); return s; };
-  const s101 = site(p101.id, "TWR", "Tower — Levels 1–30"); const s102 = site(p102.id, "VILLA", "Villa plot"); site(p103.id, "WH1", "Warehouse building 1");
+  const s101 = site(p101.id, "TWR", "Tower — Levels 1–30"); const s102 = site(p102.id, "VILLA", "Villa plot"); const s103 = site(p103.id, "WH1", "Warehouse building 1");
   const mkLoc = (code: string, name: string, type: Location["type"], projectId: string | null = null) => { const l = { id: newId("loc"), code, name, type, projectId }; db.locations.push(l); return l; };
   mkLoc("TRANSIT", "Goods in transit (system)", "transit");
   const wh = mkLoc("WH-CENTRAL", "Central Warehouse — Al Quoz (Demo)", "warehouse");
@@ -845,6 +1141,7 @@ export function seed() {
   mkUser("qs@demo.edge.test", "Demo Quantity Surveyor", "Quantity Surveyor", ["quantity_surveyor"], [p101.id, p102.id]);
   mkUser("accounts@demo.edge.test", "Demo Accountant", "Accountant", ["accountant"]);
   mkUser("viewer@demo.edge.test", "Demo Management Viewer", "Management", ["management_viewer"]);
+  const dc = mkUser("dc@demo.edge.test", "Demo Document Controller", "Document Controller", ["document_controller"], [p101.id, p102.id, p103.id]);
 
   const mkItem = (code: string, description: string, category: string, baseUnit: string, purchaseUnit: string | null, reorderLevel: Num | null, conv: [string, Num][] = []) => {
     const i = { id: newId("itm"), code, description, category, baseUnit, purchaseUnit, reorderLevel, conversions: conv.map(([unitCode, factor]) => ({ unitCode, factor })) };
@@ -905,4 +1202,56 @@ export function seed() {
   // 6) Cancelled request.
   const mr6 = createMr(se, { projectId: p101.id, requiredDate: addDays(t, 5), purpose: "Duplicate entry (demo)", lines: [{ itemId: blk.id, qty: 90, costCodeId: ccId("04-220") }] });
   cancelMr(se, mr6.id, "Duplicate of another request");
+
+  // ── Project control (mirrors projectControlDemo in server/db/seed.ts) ──
+  const atlasCodes = [{ code: "A", label: "Approved", outcome: "approved" }, { code: "B", label: "Approved as noted", outcome: "approved_as_noted" },
+    { code: "C", label: "Revise and resubmit", outcome: "revise_resubmit" }, { code: "D", label: "Rejected", outcome: "rejected" }];
+  const c101 = setCodes(pmA, p101.id, atlasCodes), c103 = setCodes(pmB, p103.id, atlasCodes);
+  const c102 = setCodes(pmB, p102.id, [{ code: "1", label: "No objection", outcome: "approved" }, { code: "2", label: "No objection with comments", outcome: "approved_as_noted" },
+    { code: "3", label: "Revise and resubmit", outcome: "revise_resubmit" }, { code: "4", label: "Not accepted", outcome: "rejected" }, { code: "FI", label: "For information", outcome: "for_information" }]);
+  type Step = ["submit", number] | ["respond", number, string, string?];
+  const subm = (projectId: string, codes: SubCode[], input: Omit<SubIn, "projectId">, steps: Step[]) => {
+    const x = createSub(dc, { projectId, ...input });
+    for (const st of steps) {
+      if (st[0] === "submit") sendSub(dc, x.id, { submittedDate: addDays(t, st[1]), transmittalRef: `TR-${x.number.slice(-3)}` });
+      else respondSub(dc, x.id, { codeId: codes.find((c) => c.code === st[2])!.id, returnedDate: addDays(t, st[1]), consultantComments: st[3] ?? null, reviewerName: "Resident Engineer (Demo)" });
+    }
+  };
+  subm(p101.id, c101, { type: "shop_drawing", title: "HVAC ducting shop drawings, Levels 3–5", discipline: "mechanical", subcontractorId: mep.id, area: "Levels 3–5", requiredBy: addDays(t, 6) }, [["submit", -24]]);
+  subm(p101.id, c101, { type: "material", title: "Interior emulsion paint, technical data sheet", discipline: "architectural", itemIds: [paint.id], requiredBy: addDays(t, 10) }, [["submit", -5]]);
+  subm(p101.id, c101, { type: "sample", title: "Porcelain floor tile 600×600 sample", discipline: "architectural", itemIds: [tile.id], specSection: "09 30 00" },
+    [["submit", -18], ["respond", -10, "C", "Provide the matt finish option and a grout colour sample"], ["submit", -8], ["respond", -2, "B", "Matt finish approved; grout colour 'light grey'"]]);
+  subm(p101.id, c101, { type: "mockup", title: "Typical apartment bathroom mock-up", discipline: "architectural", area: "Level 2, apartment 204", requiredBy: addDays(t, 5) },
+    [["submit", -6], ["respond", -3, "C", "Adjust tile setting-out at the niche; redo silicone joints"]]);
+  subm(p101.id, c101, { type: "method_statement", title: "Blockwork method statement", discipline: "civil", subcontractorId: block.id }, [["submit", -30], ["respond", -22, "A"]]);
+  subm(p101.id, c101, { type: "shop_drawing", title: "Aluminium windows shop drawings", discipline: "architectural", subcontractorId: alu.id, requiredBy: addDays(t, 25) }, []);
+  subm(p102.id, c102, { type: "material", title: "Irrigation drip line material submittal", discipline: "landscape", itemIds: [drip.id], subcontractorId: land.id }, [["submit", -25], ["respond", -15, "1"]]);
+  subm(p102.id, c102, { type: "sample", title: "Pool tiles and coping stone samples", discipline: "architectural", requiredBy: addDays(t, -1) }, [["submit", -16]]);
+  subm(p102.id, c102, { type: "sample", title: "Interlock paver colour sample", discipline: "landscape", itemIds: [paver.id] }, [["submit", -20], ["respond", -12, "2", "Charcoal border, grey field"]]);
+  subm(p103.id, c103, { type: "shop_drawing", title: "Cable tray and trunking routes", discipline: "electrical", subcontractorId: mep.id, itemIds: [cable.id] }, [["submit", -3]]);
+  subm(p103.id, c103, { type: "material", title: "Chilled water pipe and insulation", discipline: "mechanical", subcontractorId: mep.id }, [["submit", -14], ["respond", -6, "A"]]);
+
+  const workdays: string[] = [];
+  for (let d = addDays(t, -1); workdays.length < 6; d = addDays(d, -1)) if (WORKDAYS.includes(weekday(d))) workdays.push(d);
+  const daily = (author: Actor, reviewer: Actor | null, projectId: string, siteId: string, date: string, workDone: string, manpower: { trade: string; companyId?: string; headcount: number }[], extra: Partial<ReportIn> = {}) => {
+    const r = createReport(author, { projectId, siteId, reportDate: date, weather: "Clear, 33–36 °C", workDone, manpower, ...extra });
+    submitReport(author, r.id);
+    if (reviewer) reviewReport(reviewer, r.id, "accept");
+  };
+  for (const [i, d] of workdays.entries()) {
+    daily(se, i === 0 ? null : pmA, p101.id, s101.id, d, `Blockwork L${9 + (i % 3)} corridors; MEP first fix L4–5; plastering L2–3 (demo)`, [
+      { trade: "Mason", companyId: block.id, headcount: 18 - i }, { trade: "Electrician", companyId: mep.id, headcount: 9 }, { trade: "Plumber", companyId: mep.id, headcount: 6 },
+      { trade: "Plasterer", headcount: 10 }, { trade: "Helper", headcount: 14 },
+    ], i === 1 ? { delayCause: "material", issues: "Block delivery arrived at 11:00; masons idle 2 hours" } : i === 3 ? { delayCause: "consultant", issues: "Waiting for the bathroom mock-up inspection" } : {});
+  }
+  for (const d of workdays.slice(3)) {
+    daily(seB, pmB, p102.id, s102.id, d, "Driveway sub-base compaction; irrigation sleeves; pool shell waterproofing (demo)", [
+      { trade: "Landscaper", companyId: land.id, headcount: 8 }, { trade: "Mason", headcount: 4 }, { trade: "Helper", headcount: 6 },
+    ], d === workdays[4] ? { safetyIncidents: 1, safetyNotes: "Minor hand cut, first aid given on site; toolbox talk held (demo)" } : {});
+  }
+  for (const d of workdays) daily(pmB, ops, p103.id, s103.id, d, "Cable tray installation zone B; chilled water risers (demo)", [{ trade: "Electrician", companyId: mep.id, headcount: 12 }, { trade: "Pipe fitter", companyId: mep.id, headcount: 7 }]);
+
+  addProgress(pmA, p101.id, { asOfDate: addDays(t, -2), plannedPct: "46", actualPct: "41", forecastEndDate: p101.plannedEndDate, summary: "Blockwork 2 floors behind; MEP first fix on plan.", risks: "Bathroom mock-up rejected once; tile approval needed before L6 finishes." });
+  addProgress(pmB, p102.id, { asOfDate: addDays(t, -3), plannedPct: "62", actualPct: "49", forecastEndDate: addDays(p102.plannedEndDate, 21), summary: "Pool works waiting for tile and coping approval.", risks: "Client may delay handover acceptance; pool tile sample overdue with consultant." });
+  addProgress(pmB, p103.id, { asOfDate: addDays(t, -1), plannedPct: "12", actualPct: "13", summary: "Cable tray ahead of plan." });
 }

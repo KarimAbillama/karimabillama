@@ -15,6 +15,13 @@
       "when": 1792957828634,
       "tag": "0001_ledger_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793014513433,
+      "tag": "0002_project_control",
+      "breakpoints": true
     }
   ]
 }

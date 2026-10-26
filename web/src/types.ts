@@ -7,6 +7,7 @@ export interface UnitRef { code: string; name: string; dimension: string }
 export interface Reference {
   projects: ProjectRef[]; sites: SiteRef[]; locations: LocationRef[]; costCodes: CostCodeRef[]; units: UnitRef[];
   vatCodes: { code: string; label: string; rate: string }[]; vatVerified: boolean;
+  partners: { id: string; name: string; isSubcontractor: boolean; isConsultant: boolean }[];
 }
 export interface Item { id: string; code: string; description: string; category: string; baseUnit: string; purchaseUnit: string | null; conversions: { unitCode: string; baseUnitsPerUnit: string }[] }
 export interface Fulfilment { requested: string; issued: string; reserved: string; onOrder: string; inTransit: string; uncovered: string }

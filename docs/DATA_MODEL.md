@@ -60,6 +60,17 @@ erDiagram
   APPROVAL_RULES ||--o{ APPROVAL_REQUESTS : "applied by"
   APPROVAL_REQUESTS ||--|{ APPROVAL_STEPS : "sequential steps"
   USERS ||--o{ AUDIT_EVENTS : performed
+
+  PROJECTS ||--o{ SUBMITTAL_CODES : "consultant codes"
+  PROJECTS ||--o{ SUBMITTALS : has
+  SUBMITTALS ||--o{ SUBMITTAL_REVISIONS : "sent / returned"
+  SUBMITTAL_CODES ||--o{ SUBMITTAL_REVISIONS : "response code"
+  SUBMITTALS ||--o{ SUBMITTAL_ITEMS : covers
+  ITEMS ||--o{ SUBMITTAL_ITEMS : "needs approval"
+  PROJECTS ||--o{ SITE_REPORTS : "daily"
+  SITE_REPORTS ||--o{ SITE_REPORT_MANPOWER : "people"
+  COMPANIES ||--o{ SITE_REPORT_MANPOWER : subcontractor
+  PROJECTS ||--o{ PROJECT_PROGRESS_UPDATES : weekly
 ```
 
 `APPROVAL_REQUESTS.doc_id` points at a material request or a purchase order (`doc_type`).
@@ -90,6 +101,12 @@ balance). Both are polymorphic references, so they are indexed but have no forei
 | `stock_balances` | Running qty per item, location and status | `qty >= 0` |
 | `stock_movements` | **Immutable ledger** | non-zero qty; trigger blocks UPDATE/DELETE |
 | `item_valuations` | Moving average cost and valued quantity per item | valued qty ≥ 0 |
+| `submittal_codes` | The consultant's review codes for one project, each mapped to an outcome | unique per project; used codes keep their meaning (A-27) |
+| `submittals` | Shop drawings, material submittals, samples, mock-ups, method statements | status CHECK; `required_by` = needed on site |
+| `submittal_revisions` | Each time it goes to the consultant, with due date and the recorded response | response columns all set or all empty; **a recorded response cannot be changed** (trigger) |
+| `submittal_items` | Materials a submittal covers; blocks PO approval until approved (A-29) | — |
+| `site_reports`, `site_report_manpower` | Daily report per site and day, with headcount by trade and company | unique (project, site, day); headcount > 0 |
+| `project_progress_updates` | Weekly planned vs actual %, forecast finish, risks | 0–100; **append-only** (trigger) |
 
 ## Planned (not yet created)
 
@@ -97,7 +114,7 @@ Phase 2+ entities from brief §15 will be added with their modules, each with ex
 
 - employee, attendance
 - activity, baseline, progress update
-- RFI, submittal, document revision, inspection
+- RFI, drawing revision, inspection request
 - RFQ, quotation, supplier invoice
 - variation, subcontract, certificate
 - notification, action

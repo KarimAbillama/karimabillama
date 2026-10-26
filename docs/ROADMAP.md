@@ -18,13 +18,26 @@ slice at a time. Menu items only appear for modules that work.
 login → authorised project → material request → approval → PO → partial receipt → stock issue →
 project report, plus transfers, reservations, stock card, action dashboard, CSV exports and audit trail.
 
-Next slices, in proposed order:
+**Slice 2: project control** ✅ built and tested (October 2026, after EDGE said procurement/stock is about 20% of their concern)
+
+- Owner's overview of all projects: programme, approvals, site, safety and materials, rated red/amber/green, worst first
+- Submittals, samples and mock-ups register: revisions, consultant codes per project, ball-in-court, overdue days,
+  "needed on site by" date; ordering blocked until the material's submittal is approved
+- Daily site reports on a phone: manpower by trade and subcontractor, work done, delays with cause, inspections,
+  safety; PM review; reminders for missing reports
+- Weekly progress updates (planned vs actual %, forecast finish, risks)
+
+Next slices, in proposed order (reordered after EDGE's answers):
+
+0. **Money**: client payment applications and certificates, retention, variations (pending vs approved),
+   cash in vs cash out, cost vs budget per project. Then **subcontractor control**: packages, progress claims,
+   certification, back-charges.
 
 1. **Admin screens.** Create and deactivate users, assign roles and projects, edit approval rules and
    masters (items, suppliers, locations, cost codes) in the UI. Add a CSV import with preview,
    validation, duplicate detection and owner sign-off for opening stock and masters.
-2. **Daily site report.** Draft → submitted → approved/returned. Manpower, equipment, work done by
-   area, deliveries prefilled from receipts, photos (needs private file storage), PDF export.
+2. **Daily site report, part 2.** Photos (needs private file storage), equipment, deliveries prefilled
+   from receipts, PDF export, weekly client report generated from the dailies.
 3. **Basic attendance.** Foreman crew entry on mobile, no overlapping timesheets, approval lock,
    controlled corrections (scenario 6). No payroll calculation.
 4. **RFI register.** States, consultant response recorded separately from internal closure, overdue

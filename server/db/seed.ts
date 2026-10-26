@@ -4,7 +4,7 @@
  * Run with `npm run db:seed` on an empty development database. Refuses to run in production.
  */
 import { fileURLToPath } from "node:url";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { createDb, type DB } from "./client.js";
 import { baseSeed } from "./baseSeed.js";
 import {
@@ -18,6 +18,11 @@ import { cancelMr, createMr, getMr, submitMr } from "../services/materialRequest
 import { reserveForLine } from "../services/materialRequests.js";
 import { createPo, getPo, receiveGoods, submitPo } from "../services/purchasing.js";
 import { dispatchTransfer, issueStock, postOpeningBalance } from "../services/inventory.js";
+import { createSubmittal, recordResponse, setCodes, submitToConsultant } from "../services/submittals.js";
+import { createSiteReport, reviewSiteReport, submitSiteReport } from "../services/siteReports.js";
+import { addProgressUpdate } from "../services/overview.js";
+import { SITE_WORKING_DAYS } from "../lib/workdays.js";
+import { weekday } from "../lib/dates.js";
 import { myPendingApprovals } from "../services/approvals.js";
 
 export const DEMO_PASSWORD = "Demo@2026!";
@@ -220,7 +225,110 @@ export async function demoSeed(db: DB) {
   const mr6 = await createMr(db, seA, { projectId: p101.id, requiredDate: addDays(today, 5), purpose: "Duplicate entry (demo)", lines: [{ itemId: blk.id, qty: "90", costCodeId: await cc("04-220") }] });
   await cancelMr(db, seA, mr6.id, "Duplicate of another request");
 
+  await projectControlDemo(db, { p101, p102, p103, s101, s102, s103, se, seB, pmA, pmB, ops, paint, tile, drip, paver, cable });
+
   console.log(`Demo data loaded. All demo users share the password: ${DEMO_PASSWORD}`);
+}
+
+type Row = { id: string };
+
+/** Submittals, samples, mock-ups, daily site reports and progress for the three demo projects. */
+async function projectControlDemo(db: DB, r: {
+  p101: Row; p102: Row; p103: Row; s101: Row; s102: Row; s103: Row; se: Row; seB: Row; pmA: Row; pmB: Row; ops: Row;
+  paint: Row; tile: Row; drip: Row; paver: Row; cable: Row;
+}) {
+  const today = businessToday();
+  const A = async (u: Row) => (await loadActor(db, u.id)) as Actor;
+  const co = async (code: string, name: string, flags: Partial<typeof companies.$inferInsert>) =>
+    (await db.insert(companies).values({ code, name, ...flags }).returning())[0];
+  const [atlas] = await db.select().from(companies).where(eq(companies.code, "CN-DEMO-01"));
+  const coastline = await co("CN-DEMO-02", "Coastline Landscape Architects (Demo)", { isConsultant: true });
+  const mep = await co("SC-DEMO-01", "Al Noor Electromechanical (Demo)", { isSubcontractor: true });
+  const block = await co("SC-DEMO-02", "Pioneer Blockwork Contracting (Demo)", { isSubcontractor: true });
+  const land = await co("SC-DEMO-03", "Desert Rose Landscaping (Demo)", { isSubcontractor: true });
+  const alu = await co("SC-DEMO-04", "Gulf Aluminium & Glazing (Demo)", { isSubcontractor: true });
+  await db.update(projects).set({ consultantCompanyId: atlas.id }).where(inArray(projects.id, [r.p101.id, r.p103.id]));
+  await db.update(projects).set({ consultantCompanyId: coastline.id }).where(eq(projects.id, r.p102.id));
+
+  // Document controller for all three projects.
+  const [dcRole] = await db.select().from(roles).where(eq(roles.key, "document_controller"));
+  const [dcUser] = await db.insert(users).values({ email: "dc@demo.edge.test", fullName: "Demo Document Controller", jobTitle: "Document Controller", passwordHash: await hashPassword(DEMO_PASSWORD) }).returning();
+  await db.insert(userRoles).values({ userId: dcUser.id, roleId: dcRole.id });
+  for (const p of [r.p101, r.p102, r.p103]) await db.insert(projectMembers).values({ userId: dcUser.id, projectId: p.id });
+  const dc = await A(dcUser), pmA = await A(r.pmA), pmB = await A(r.pmB), se = await A(r.se), seB = await A(r.seB), ops = await A(r.ops);
+
+  // Each consultant uses their own codes.
+  const atlasCodes = [
+    { code: "A", label: "Approved", outcome: "approved" as const }, { code: "B", label: "Approved as noted", outcome: "approved_as_noted" as const },
+    { code: "C", label: "Revise and resubmit", outcome: "revise_resubmit" as const }, { code: "D", label: "Rejected", outcome: "rejected" as const },
+  ];
+  const c101 = await setCodes(db, pmA, r.p101.id, atlasCodes);
+  const c103 = await setCodes(db, pmB, r.p103.id, atlasCodes);
+  const c102 = await setCodes(db, pmB, r.p102.id, [
+    { code: "1", label: "No objection", outcome: "approved" }, { code: "2", label: "No objection with comments", outcome: "approved_as_noted" },
+    { code: "3", label: "Revise and resubmit", outcome: "revise_resubmit" }, { code: "4", label: "Not accepted", outcome: "rejected" },
+    { code: "FI", label: "For information", outcome: "for_information" },
+  ]);
+  const code = (set: { id: string; code: string }[], c: string) => set.find((x) => x.code === c)!.id;
+
+  type Step = ["submit", number] | ["respond", number, string, string?];
+  const submittal = async (projectId: string, codes: { id: string; code: string }[], input: Omit<Parameters<typeof createSubmittal>[2], "projectId">, steps: Step[]) => {
+    const x = await createSubmittal(db, dc, { projectId, ...input });
+    for (const st of steps) {
+      if (st[0] === "submit") await submitToConsultant(db, dc, x.id, { submittedDate: addDays(today, st[1]), transmittalRef: `TR-${x.number.slice(-3)}` });
+      else await recordResponse(db, dc, x.id, { codeId: code(codes, st[2]), returnedDate: addDays(today, st[1]), consultantComments: st[3] ?? null, reviewerName: "Resident Engineer (Demo)" });
+    }
+  };
+  // DEMO-101 (Atlas: A/B/C/D)
+  await submittal(r.p101.id, c101, { type: "shop_drawing", title: "HVAC ducting shop drawings, Levels 3–5", discipline: "mechanical", subcontractorId: mep.id, area: "Levels 3–5", requiredBy: addDays(today, 6) }, [["submit", -24]]);
+  await submittal(r.p101.id, c101, { type: "material", title: "Interior emulsion paint, technical data sheet", discipline: "architectural", itemIds: [r.paint.id], requiredBy: addDays(today, 10) }, [["submit", -5]]);
+  await submittal(r.p101.id, c101, { type: "sample", title: "Porcelain floor tile 600×600 sample", discipline: "architectural", itemIds: [r.tile.id], specSection: "09 30 00" },
+    [["submit", -18], ["respond", -10, "C", "Provide the matt finish option and a grout colour sample"], ["submit", -8], ["respond", -2, "B", "Matt finish approved; grout colour 'light grey'"]]);
+  await submittal(r.p101.id, c101, { type: "mockup", title: "Typical apartment bathroom mock-up", discipline: "architectural", area: "Level 2, apartment 204", requiredBy: addDays(today, 5) },
+    [["submit", -6], ["respond", -3, "C", "Adjust tile setting-out at the niche; redo silicone joints"]]);
+  await submittal(r.p101.id, c101, { type: "method_statement", title: "Blockwork method statement", discipline: "civil", subcontractorId: block.id }, [["submit", -30], ["respond", -22, "A"]]);
+  await submittal(r.p101.id, c101, { type: "shop_drawing", title: "Aluminium windows shop drawings", discipline: "architectural", subcontractorId: alu.id, requiredBy: addDays(today, 25) }, []);
+  // DEMO-102 (Coastline: 1/2/3/4)
+  await submittal(r.p102.id, c102, { type: "material", title: "Irrigation drip line material submittal", discipline: "landscape", itemIds: [r.drip.id], subcontractorId: land.id }, [["submit", -25], ["respond", -15, "1"]]);
+  await submittal(r.p102.id, c102, { type: "sample", title: "Pool tiles and coping stone samples", discipline: "architectural", requiredBy: addDays(today, -1) }, [["submit", -16]]);
+  await submittal(r.p102.id, c102, { type: "sample", title: "Interlock paver colour sample", discipline: "landscape", itemIds: [r.paver.id] }, [["submit", -20], ["respond", -12, "2", "Charcoal border, grey field"]]);
+  // DEMO-103 (Atlas)
+  await submittal(r.p103.id, c103, { type: "shop_drawing", title: "Cable tray and trunking routes", discipline: "electrical", subcontractorId: mep.id, itemIds: [r.cable.id] }, [["submit", -3]]);
+  await submittal(r.p103.id, c103, { type: "material", title: "Chilled water pipe and insulation", discipline: "mechanical", subcontractorId: mep.id }, [["submit", -14], ["respond", -6, "A"]]);
+
+  // Daily site reports for the last working days (DEMO-102 has stopped reporting).
+  const workdays: string[] = [];
+  for (let d = addDays(today, -1); workdays.length < 6; d = addDays(d, -1)) if (SITE_WORKING_DAYS.includes(weekday(d))) workdays.push(d);
+  const daily = async (author: Actor, reviewer: Actor | null, projectId: string, siteId: string, date: string, workDone: string, manpower: { trade: string; companyId?: string; headcount: number }[], extra: Record<string, unknown> = {}) => {
+    const rep = await createSiteReport(db, author, { projectId, siteId, reportDate: date, weather: "Clear, 33–36 °C", workDone, manpower, ...extra });
+    await submitSiteReport(db, author, rep.id);
+    if (reviewer) await reviewSiteReport(db, reviewer, rep.id, "accept");
+  };
+  for (const [i, d] of workdays.entries()) {
+    await daily(se, i === 0 ? null : pmA, r.p101.id, r.s101.id, d, `Blockwork L${9 + (i % 3)} corridors; MEP first fix L4–5; plastering L2–3 (demo)`, [
+      { trade: "Mason", companyId: block.id, headcount: 18 - i }, { trade: "Electrician", companyId: mep.id, headcount: 9 }, { trade: "Plumber", companyId: mep.id, headcount: 6 },
+      { trade: "Plasterer", headcount: 10 }, { trade: "Helper", headcount: 14 },
+    ], i === 1 ? { delayCause: "material", issues: "Block delivery arrived at 11:00; masons idle 2 hours" } : i === 3 ? { delayCause: "consultant", issues: "Waiting for the bathroom mock-up inspection" } : {});
+  }
+  for (const d of workdays.slice(3)) {
+    await daily(seB, pmB, r.p102.id, r.s102.id, d, "Driveway sub-base compaction; irrigation sleeves; pool shell waterproofing (demo)", [
+      { trade: "Landscaper", companyId: land.id, headcount: 8 }, { trade: "Mason", headcount: 4 }, { trade: "Helper", headcount: 6 },
+    ], d === workdays[4] ? { safetyIncidents: 1, safetyNotes: "Minor hand cut, first aid given on site; toolbox talk held (demo)" } : {});
+  }
+  for (const d of workdays) {
+    await daily(pmB, ops, r.p103.id, r.s103.id, d, "Cable tray installation zone B; chilled water risers (demo)", [
+      { trade: "Electrician", companyId: mep.id, headcount: 12 }, { trade: "Pipe fitter", companyId: mep.id, headcount: 7 },
+    ]);
+  }
+
+  // Weekly progress (planned vs actual).
+  const [p1] = await db.select().from(projects).where(eq(projects.id, r.p101.id));
+  const [p2] = await db.select().from(projects).where(eq(projects.id, r.p102.id));
+  await addProgressUpdate(db, pmA, { projectId: r.p101.id, asOfDate: addDays(today, -2), plannedPct: "46", actualPct: "41", forecastEndDate: p1.plannedEndDate,
+    summary: "Blockwork 2 floors behind; MEP first fix on plan.", risks: "Bathroom mock-up rejected once; tile approval needed before L6 finishes." });
+  await addProgressUpdate(db, pmB, { projectId: r.p102.id, asOfDate: addDays(today, -3), plannedPct: "62", actualPct: "49", forecastEndDate: addDays(p2.plannedEndDate!, 21),
+    summary: "Pool works waiting for tile and coping approval.", risks: "Client may delay handover acceptance; pool tile sample overdue with consultant." });
+  await addProgressUpdate(db, pmB, { projectId: r.p103.id, asOfDate: addDays(today, -1), plannedPct: "12", actualPct: "13", summary: "Cable tray ahead of plan." });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

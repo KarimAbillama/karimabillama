@@ -9,6 +9,20 @@ once and reused: a project, supplier, item or cost code is one record shared by 
 
 ## What works today
 
+**Project control (for the owner and project managers)**
+
+- **All projects at a glance.** The owner's start page rates every project red, amber or green on
+  programme, approvals, site, safety and materials, worst first, and lists exactly what needs attention.
+- **Submittals, samples and mock-ups.** One register with every revision, the consultant's code and
+  comments, who holds it now, how many days it has been with the consultant and when the reply is due.
+  Each consultant's own codes are set per project. A material cannot be ordered until its submittal is
+  approved.
+- **Daily site reports from a phone.** People per trade and subcontractor, work done, what held work up
+  and why, inspections, safety. The PM accepts or returns them; missing reports are flagged.
+- **Weekly progress.** Planned vs actual %, forecast finish and risks, entered by the PM.
+
+**Materials (procurement and stock)**
+
 The full **site-to-stock-to-cost** journey, with real database records, permissions and tests:
 
 1. **Sign in.** Each person only sees the projects they are assigned to. Supplier prices and costs
@@ -95,12 +109,13 @@ Open <http://localhost:5173>. All demo users share the password **`Demo@2026!`**
 
 | Sign in as | Role | Try this |
 |---|---|---|
-| `engineer.marina@demo.edge.test` | Site engineer, project DEMO-101 | Raise a material request, receive a delivery |
+| `director@demo.edge.test` | Director | Starts on the overview of all projects |
+| `dc@demo.edge.test` | Document controller, all three projects | Submittals: resubmit, record the consultant's response |
+| `engineer.marina@demo.edge.test` | Site engineer, project DEMO-101 | Write the daily report, raise a material request, receive a delivery |
 | `pm.marina@demo.edge.test` | Project manager, DEMO-101 | Approve requests and POs, view the project report |
 | `procurement@demo.edge.test` | Procurement officer, all projects | "Order shortage" from an approved request |
 | `stores@demo.edge.test` | Storekeeper | Reserve stock, issue to crews, transfers |
 | `ops@demo.edge.test` | Operations manager | Second-level PO approval, resolve transfer discrepancies |
-| `director@demo.edge.test` | Director | Third-level approval, company-wide view |
 | `foreman.marina@demo.edge.test` | Foreman | Requests only; no prices, no POs |
 | `engineer.villa@demo.edge.test` | Site engineer, DEMO-102 | Cannot see DEMO-101 at all |
 | `admin@demo.edge.test`, `qs@…`, `accounts@…`, `viewer@…` | Other roles | |

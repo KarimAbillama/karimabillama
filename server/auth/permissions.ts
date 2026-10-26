@@ -25,6 +25,11 @@ export const PERMISSIONS = {
   "report.export": "Export registers and reports to CSV",
   "audit.view": "View the audit trail",
   "admin.users": "Manage users, roles and project membership",
+  "submittal.view": "View submittals, samples and mock-ups and their consultant responses",
+  "submittal.manage": "Create submittals, send them to the consultant and record the response",
+  "sitereport.create": "Write and submit daily site reports",
+  "sitereport.review": "Review daily site reports (accept or return)",
+  "progress.update": "Record weekly project progress (planned vs actual, forecast finish)",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

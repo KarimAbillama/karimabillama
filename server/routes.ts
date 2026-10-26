@@ -20,6 +20,9 @@ import * as inv from "./services/inventory.js";
 import * as mr from "./services/materialRequests.js";
 import * as po from "./services/purchasing.js";
 import { dashboard, drillRows, projectDrill, projectReport } from "./services/reports.js";
+import * as sub from "./services/submittals.js";
+import * as sr from "./services/siteReports.js";
+import { addProgressUpdate, overview, progressHistory } from "./services/overview.js";
 
 const uuid = z.string().uuid();
 const decimalStr = z.union([z.string(), z.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d+)?$/.test(v), "Must be a number");
@@ -39,6 +42,18 @@ const poBody = z.object({
   paymentTerms: optText, supplierQuoteRef: optText, notes: optText, lines: z.array(poLine).min(1).max(200),
 });
 const idemKey = z.string().min(8).max(100);
+
+const submittalBody = z.object({
+  projectId: uuid, type: z.enum(sub.SUBMITTAL_TYPES), title: z.string().trim().min(1).max(300), discipline: z.enum(sub.DISCIPLINES),
+  specSection: optText, area: optText, subcontractorId: uuid.nullish(), consultantId: uuid.nullish(), requiredBy: isoDate.nullish(),
+  itemIds: z.array(uuid).max(50).default([]),
+});
+const siteReportBody = z.object({
+  projectId: uuid, siteId: uuid.nullish(), reportDate: isoDate, weather: optText, workDone: z.string().trim().max(5000), issues: optText,
+  delayCause: z.enum(sr.DELAY_CAUSES).nullish(), inspections: optText, visitors: optText,
+  safetyIncidents: z.number().int().min(0).max(100).default(0), safetyNotes: optText,
+  manpower: z.array(z.object({ trade: z.string().trim().min(1).max(100), companyId: uuid.nullish(), headcount: z.number().int().min(1).max(5000) })).max(100),
+});
 
 const actorOf = (req: { actor: Actor | null }) => req.actor!;
 
@@ -67,6 +82,9 @@ export async function registerRoutes(app: FastifyInstance, db: DB) {
       units: await db.select().from(units).orderBy(asc(units.code)),
       vatCodes: Object.entries(VAT_CODES).map(([code, v]) => ({ code, ...v })),
       vatVerified: VAT_VERIFIED,
+      // Subcontractors and consultants, for site manpower and submittals (names only).
+      partners: await db.select({ id: companies.id, name: companies.name, isSubcontractor: companies.isSubcontractor, isConsultant: companies.isConsultant })
+        .from(companies).where(and(eq(companies.isActive, true), sql`(${companies.isSubcontractor} or ${companies.isConsultant})`)).orderBy(asc(companies.name)),
     };
   });
 
@@ -304,15 +322,79 @@ export async function registerRoutes(app: FastifyInstance, db: DB) {
       .map((r) => ({ ...r.e, userName: r.userName, projectCode: r.projectCode }));
   });
 
+  // ───────────── Owner's overview & progress ─────────────
+  app.get("/api/overview", async (req) => overview(db, actorOf(req)));
+  app.get("/api/projects/:id/progress", async (req) => progressHistory(db, actorOf(req), idParam.parse(req.params).id));
+  app.post("/api/projects/:id/progress", async (req) => {
+    const b = z.object({
+      asOfDate: isoDate, plannedPct: decimalStr, actualPct: decimalStr, forecastEndDate: isoDate.nullish(), summary: optText, risks: optText,
+    }).parse(req.body);
+    return addProgressUpdate(db, actorOf(req), { ...b, projectId: idParam.parse(req.params).id });
+  });
+
+  // ───────────── Submittals, samples & mock-ups ─────────────
+  app.get("/api/submittals", async (req) => {
+    const q = z.object({ projectId: uuid.optional(), status: z.string().optional(), type: z.string().optional(), ball: z.enum(["consultant", "edge"]).optional(), overdue: z.coerce.boolean().optional() }).parse(req.query);
+    return sub.listSubmittals(db, actorOf(req), q);
+  });
+  app.post("/api/submittals", async (req) => sub.createSubmittal(db, actorOf(req), submittalBody.parse(req.body)));
+  app.get("/api/submittals/:id", async (req) => sub.getSubmittal(db, actorOf(req), idParam.parse(req.params).id));
+  app.put("/api/submittals/:id", async (req) => {
+    const b = submittalBody.omit({ projectId: true }).extend({ version: z.number().int() }).parse(req.body);
+    return sub.updateSubmittal(db, actorOf(req), idParam.parse(req.params).id, b);
+  });
+  app.post("/api/submittals/:id/submit", async (req) => {
+    const b = z.object({ submittedDate: isoDate, transmittalRef: optText, notes: optText, version: z.number().int().optional() }).parse(req.body);
+    return sub.submitToConsultant(db, actorOf(req), idParam.parse(req.params).id, b);
+  });
+  app.post("/api/submittals/:id/response", async (req) => {
+    const b = z.object({ codeId: uuid, returnedDate: isoDate, consultantComments: optText, reviewerName: optText, inspectionDate: isoDate.nullish(), version: z.number().int().optional() }).parse(req.body);
+    return sub.recordResponse(db, actorOf(req), idParam.parse(req.params).id, b);
+  });
+  app.post("/api/submittals/:id/cancel", async (req) => {
+    const b = z.object({ reason: z.string().trim().min(1) }).parse(req.body);
+    await sub.cancelSubmittal(db, actorOf(req), idParam.parse(req.params).id, b.reason);
+    return { ok: true };
+  });
+  app.get("/api/projects/:id/submittal-codes", async (req) => sub.listCodes(db, actorOf(req), idParam.parse(req.params).id));
+  app.put("/api/projects/:id/submittal-codes", async (req) => {
+    const b = z.object({ codes: z.array(z.object({ code: z.string().trim().min(1).max(10), label: z.string().trim().min(1).max(100), outcome: z.enum(sub.OUTCOMES) })).min(1).max(20) }).parse(req.body);
+    return sub.setCodes(db, actorOf(req), idParam.parse(req.params).id, b.codes);
+  });
+
+  // ───────────── Daily site reports ─────────────
+  app.get("/api/site-reports", async (req) => {
+    const q = z.object({ projectId: uuid.optional(), from: isoDate.optional(), to: isoDate.optional(), status: z.string().optional(), limit: z.coerce.number().int().min(1).max(500).optional() }).parse(req.query);
+    return sr.listSiteReports(db, actorOf(req), q);
+  });
+  app.post("/api/site-reports", async (req) => sr.createSiteReport(db, actorOf(req), siteReportBody.parse(req.body)));
+  app.get("/api/site-reports/:id", async (req) => sr.getSiteReport(db, actorOf(req), idParam.parse(req.params).id));
+  app.put("/api/site-reports/:id", async (req) => {
+    const b = siteReportBody.omit({ projectId: true, reportDate: true }).extend({ version: z.number().int() }).parse(req.body);
+    return sr.updateSiteReport(db, actorOf(req), idParam.parse(req.params).id, b);
+  });
+  app.post("/api/site-reports/:id/submit", async (req) => {
+    const b = z.object({ version: z.number().int().optional() }).parse(req.body ?? {});
+    await sr.submitSiteReport(db, actorOf(req), idParam.parse(req.params).id, b.version);
+    return { ok: true };
+  });
+  app.post("/api/site-reports/:id/review", async (req) => {
+    const b = z.object({ decision: z.enum(["accept", "return"]), comment: optText }).parse(req.body);
+    await sr.reviewSiteReport(db, actorOf(req), idParam.parse(req.params).id, b.decision, b.comment);
+    return { ok: true };
+  });
+
   /** Document history visible to anyone who can see the document itself. */
   app.get("/api/history/:type/:id", async (req) => {
     const a = actorOf(req);
-    const p = z.object({ type: z.enum(["material_request", "purchase_order", "goods_receipt", "stock_issue", "stock_transfer"]), id: uuid }).parse(req.params);
+    const p = z.object({ type: z.enum(["material_request", "purchase_order", "goods_receipt", "stock_issue", "stock_transfer", "submittal", "site_report"]), id: uuid }).parse(req.params);
     if (p.type === "material_request") await mr.getMr(db, a, p.id);
     else if (p.type === "purchase_order") await po.getPo(db, a, p.id);
     else if (p.type === "goods_receipt") await po.getReceipt(db, a, p.id);
     else if (p.type === "stock_issue") await inv.getIssue(db, a, p.id);
     else if (p.type === "stock_transfer") await inv.getTransfer(db, a, p.id);
+    else if (p.type === "submittal") await sub.getSubmittal(db, a, p.id);
+    else if (p.type === "site_report") await sr.getSiteReport(db, a, p.id);
     else throw rule("UNKNOWN_TYPE", "Unknown type");
     return db.select({ id: auditEvents.id, at: auditEvents.at, action: auditEvents.action, details: auditEvents.details, userName: users.fullName })
       .from(auditEvents).leftJoin(users, eq(users.id, auditEvents.userId))

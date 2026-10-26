@@ -45,13 +45,13 @@ function toast(text: string) {
 }
 
 const PEOPLE: [string, string, string][] = [
-  ["engineer.marina@demo.edge.test", "Site engineer", "raises requests, receives deliveries"],
-  ["pm.marina@demo.edge.test", "Project manager", "approves, sees the report"],
+  ["director@demo.edge.test", "Owner / Director", "all projects at a glance"],
+  ["pm.marina@demo.edge.test", "Project manager", "progress, approvals, reviews daily reports"],
+  ["engineer.marina@demo.edge.test", "Site engineer", "daily report, material requests, deliveries"],
+  ["dc@demo.edge.test", "Document controller", "submittals, samples, mock-ups"],
   ["procurement@demo.edge.test", "Procurement", "orders what is missing"],
   ["stores@demo.edge.test", "Storekeeper", "reserves, issues, transfers"],
   ["ops@demo.edge.test", "Operations manager", "second approval on bigger orders"],
-  ["director@demo.edge.test", "Director", "third approval, all projects"],
-  ["foreman.marina@demo.edge.test", "Foreman", "requests only, no prices"],
 ];
 
 // Open signed in, so the first thing on screen is the app itself.

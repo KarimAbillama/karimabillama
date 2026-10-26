@@ -46,7 +46,7 @@ async function session(email: string, viewport = { width: 1366, height: 900 }) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(DEMO_PASSWORD);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("heading", { name: /Good day/ }).waitFor();
+  await page.locator("main h1").first().waitFor();
   return { page, close: () => ctx.close() };
 }
 /** The input/select inside a form field whose visible label is exactly `label`. */
@@ -144,7 +144,7 @@ try {
 
   await step("project manager reviews the project report with drill-down", async () => {
     const { page, close } = await session("pm.marina@demo.edge.test");
-    await page.getByRole("link", { name: "Project report" }).click();
+    await page.getByRole("link", { name: "Materials report" }).click();
     await page.getByText("Committed", { exact: true }).first().waitFor();
     await page.getByText("Not tracked yet").first().waitFor();
     await page.getByRole("button", { name: "Show source records" }).first().click();
@@ -158,6 +158,66 @@ try {
     await page.goto(mrUrl);
     await page.getByText("Material request not found").waitFor();
     await close();
+  });
+
+  // ───────────── Project control ─────────────
+  await step("the director starts on the overview of all projects, worst first", async () => {
+    const { page, close } = await session("director@demo.edge.test");
+    await page.locator(".totals-strip").waitFor();
+    await page.locator(".project-row").nth(2).waitFor();
+    if (!(await page.locator(".project-row").first().getAttribute("class"))?.includes("rag-edge-red")) throw new Error("worst project is not first");
+    await page.screenshot({ path: `${SHOTS}/10-owner-overview.png`, fullPage: true });
+    await close();
+  });
+
+  await step("the document controller resubmits the mock-up and records the consultant's approval", async () => {
+    const { page, close } = await session("dc@demo.edge.test");
+    await page.getByRole("link", { name: "Submittals & mock-ups" }).click();
+    await page.getByRole("link", { name: "SUB-2026-00004" }).click();
+    await page.getByRole("button", { name: /Resubmit as revision 1/ }).click();
+    await field(page, "Transmittal no.").fill("TR-104");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.getByRole("button", { name: "Record consultant response" }).click();
+    await field(page, "Code").selectOption({ label: "B — Approved as noted" });
+    await field(page, "Consultant's comments").fill("Setting-out accepted");
+    await page.getByRole("button", { name: "Save response" }).click();
+    await page.locator("h1 .badge", { hasText: /^approved$/i }).waitFor();
+    await page.screenshot({ path: `${SHOTS}/11-submittal-revisions.png`, fullPage: true });
+    await close();
+  });
+
+  await step("paint cannot be ordered until its material submittal is approved", async () => {
+    const { page, close } = await session("procurement@demo.edge.test");
+    await page.getByRole("link", { name: "Purchase orders" }).click();
+    await page.getByRole("link", { name: "New purchase order" }).click();
+    await field(page, "Supplier").selectOption({ label: "Gulf Building Materials Trading (Demo)" });
+    await page.getByLabel("Deliver to").selectOption({ label: "SS-101 — Site store — Marina Tower" });
+    await page.getByLabel("Item", { exact: true }).selectOption({ label: "PNT-EMU-WHT — Interior emulsion paint, white (l)" });
+    await field(page, "Qty").fill("5");
+    await page.getByLabel("Unit price (AED, excl. VAT)").fill("120");
+    await field(page, "Cost code").selectOption({ label: "09-900 Painting & coatings" });
+    await page.getByRole("button", { name: "Save & submit for approval" }).click();
+    await page.getByText("Not approved by the consultant yet").waitFor();
+    await close();
+  });
+
+  await step("the site engineer writes the daily report on a phone and the PM accepts it", async () => {
+    const eng = await session("engineer.villa@demo.edge.test", { width: 390, height: 844 });
+    await eng.page.getByRole("link", { name: "Write today's report" }).first().click();
+    await field(eng.page, "Trade").fill("Landscaper");
+    await field(eng.page, "Number").fill("9");
+    await field(eng.page, "Work done today").fill("Paving driveway bay 1; irrigation laterals zone A");
+    await field(eng.page, "Was work held up?").selectOption({ label: "Yes: Consultant (approval / inspection)" });
+    await field(eng.page, "What held the work up (required)").fill("Pool tiling on hold: tile sample still with the consultant");
+    await eng.page.screenshot({ path: `${SHOTS}/12-daily-report-phone.png`, fullPage: true });
+    await eng.page.getByRole("button", { name: "Submit to project manager" }).click();
+    await eng.page.locator("h1 .badge", { hasText: /submitted/i }).waitFor();
+    await eng.close();
+    const pm = await session("pm.villa@demo.edge.test");
+    await pm.page.getByRole("link", { name: /Review the daily report/ }).first().click();
+    await pm.page.getByRole("button", { name: "Accept" }).click();
+    await pm.page.locator("h1 .badge", { hasText: /reviewed/i }).waitFor();
+    await pm.close();
   });
 
   await step("home dashboard on a phone", async () => {

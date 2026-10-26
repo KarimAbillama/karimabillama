@@ -11,6 +11,12 @@ import { TransferList, TransferForm, TransferDetail } from "./pages/Transfers";
 import { ProjectReport } from "./pages/Report";
 import { ApprovalsInbox } from "./pages/Approvals";
 import { AdminUsers, AuditLog } from "./pages/Admin";
+import { Overview } from "./pages/Overview";
+import { SubmittalDetail, SubmittalForm, SubmittalList } from "./pages/Submittals";
+import { SiteReportDetail, SiteReportForm, SiteReportList } from "./pages/SiteReports";
+
+/** Owners and managers who look across all projects start on the overview. */
+const OVERVIEW_FIRST = ["director", "operations_manager", "management_viewer"];
 
 const PROJECT_KEY = "edge.projectId";
 
@@ -52,7 +58,17 @@ export function App() {
     <AppContext.Provider value={ctx}>
       <Shell onLogout={() => { setMe(null); setRef(null); }}>
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={me.roles.some((r) => OVERVIEW_FIRST.includes(r)) ? <Overview /> : <Home />} />
+          <Route path="/today" element={<Home />} />
+          <Route path="/overview" element={<Overview />} />
+          <Route path="/submittals" element={<SubmittalList />} />
+          <Route path="/submittals/new" element={<SubmittalForm />} />
+          <Route path="/submittals/:id" element={<SubmittalDetail />} />
+          <Route path="/submittals/:id/edit" element={<SubmittalForm />} />
+          <Route path="/site-reports" element={<SiteReportList />} />
+          <Route path="/site-reports/new" element={<SiteReportForm />} />
+          <Route path="/site-reports/:id" element={<SiteReportDetail />} />
+          <Route path="/site-reports/:id/edit" element={<SiteReportForm />} />
           <Route path="/material-requests" element={<MrList />} />
           <Route path="/material-requests/new" element={<MrForm />} />
           <Route path="/material-requests/:id" element={<MrDetail />} />
@@ -82,17 +98,23 @@ function Shell({ children, onLogout }: { children: React.ReactNode; onLogout: ()
   const { me, ref, projectId, setProjectId, can } = useApp();
   const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
-  const links: [string, string, boolean][] = [
-    ["/", "Home", true],
+  const overviewFirst = me.roles.some((r) => OVERVIEW_FIRST.includes(r));
+  // [path, label, visible, group heading shown before it]
+  const links: [string, string, boolean, string?][] = [
+    ["/", overviewFirst ? "All projects" : "My day", true],
+    [overviewFirst ? "/today" : "/overview", overviewFirst ? "My day" : "All projects", overviewFirst || can("report.view")],
     ["/approvals", "Approvals", can("mr.approve") || can("po.approve")],
-    ["/material-requests", "Material requests", can("mr.view")],
+    ["/site-reports", "Daily site reports", can("project.view"), "Project control"],
+    ["/submittals", "Submittals & mock-ups", can("submittal.view")],
+    ["/material-requests", "Material requests", can("mr.view"), "Materials"],
     ["/purchase-orders", "Purchase orders", can("po.view")],
     ["/stock", "Stock", can("stock.view")],
     ["/transfers", "Transfers", can("stock.view")],
-    ["/report", "Project report", can("report.view")],
-    ["/admin/users", "Users", can("admin.users")],
+    ["/report", "Materials report", can("report.view")],
+    ["/admin/users", "Users", can("admin.users"), "Admin"],
     ["/admin/audit", "Audit trail", can("audit.view")],
   ];
+  let lastGroup: string | undefined;
   return (
     <div className="shell">
       <header className="topbar">
@@ -109,9 +131,11 @@ function Shell({ children, onLogout }: { children: React.ReactNode; onLogout: ()
       </header>
       <div className="layout">
         <nav className={`sidenav ${menuOpen ? "open" : ""}`} onClick={() => setMenuOpen(false)}>
-          {links.filter((l) => l[2]).map(([to, label]) => (
-            <NavLink key={to} to={to} end={to === "/"}>{label}</NavLink>
-          ))}
+          {links.filter((l) => l[2]).map(([to, label, , group]) => {
+            const heading = group && group !== lastGroup ? <div className="nav-group">{group}</div> : null;
+            if (group) lastGroup = group;
+            return <span key={to} className="nav-item">{heading}<NavLink to={to} end={to === "/"}>{label}</NavLink></span>;
+          })}
           <div className="nav-foot muted">Roles: {me.roles.join(", ").replace(/_/g, " ")}</div>
         </nav>
         <main>{children}</main>

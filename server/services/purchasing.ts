@@ -24,6 +24,7 @@ import { VAT_CODES, type VatCode } from "../lib/vat.js";
 import { approvalHistory, startApproval, supersedeApprovals } from "./approvals.js";
 import { lineFulfilment } from "./materialRequests.js";
 import { postMovement, valuationIn } from "./stock.js";
+import { blockingSubmittals } from "./submittals.js";
 
 export interface PoLineInput {
   itemId: string; mrLineId?: string | null; costCodeId: string; unitCode: string; qty: string; unitPrice: string; vatCode: VatCode;
@@ -153,6 +154,12 @@ export async function submitPo(db: DB, actor: Actor, id: string, version?: numbe
     const po = await lockPo(tx, actor, id);
     if (version !== undefined && po.version !== version) throw conflict("This purchase order changed after you opened it. Reload and try again.");
     if (po.status !== "draft") throw rule("INVALID_STATE", `Cannot submit a purchase order that is ${po.status}.`);
+    // Materials that need consultant approval cannot be ordered before it is given (A-29).
+    const lineItems = await tx.select({ itemId: purchaseOrderLines.itemId }).from(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, id));
+    const blocked = await blockingSubmittals(tx, po.projectId, [...new Set(lineItems.map((l) => l.itemId))]);
+    if (blocked.length) {
+      throw rule("SUBMITTAL_NOT_APPROVED", `Not approved by the consultant yet: ${blocked.map((b) => `${b.itemCode} (${b.numbers.join(", ")})`).join("; ")}. Order once the submittal is approved.`, blocked);
+    }
     const [updated] = await tx.update(purchaseOrders)
       .set({ status: "pending_approval", submittedAt: new Date(), version: po.version + 1, updatedAt: new Date() })
       .where(eq(purchaseOrders.id, id)).returning();
