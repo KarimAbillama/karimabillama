@@ -1,6 +1,6 @@
 # Roadmap and backlog
 
-Order will be adjusted after discovery answers (`docs/DISCOVERY.md`). We build one tested vertical
+Full module list and build order: `docs/ERP_SCOPE.md`. Order will be adjusted after discovery answers (`docs/DISCOVERY.md`). We build one tested vertical
 slice at a time. Menu items only appear for modules that work.
 
 ## Phase 0 — Discovery and foundation ✅ (pending EDGE answers)
