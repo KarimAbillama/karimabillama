@@ -12,3 +12,4 @@ storage/
 
 # Temporary passwords written by "edge import" (give out, then delete)
 temporary-passwords-*.csv
+docs/screenshots/failure.png
