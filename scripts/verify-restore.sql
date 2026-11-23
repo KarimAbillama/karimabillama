@@ -6,9 +6,10 @@ left join (select item_id, location_id, status, sum(qty_delta) q from stock_move
   on m.item_id = b.item_id and m.location_id = b.location_id and m.status = b.status
 where b.qty <> coalesce(m.q, 0);
 
-\echo '2. Append-only triggers are present (expect 8, plus 1 response lock)'
+\echo '2. Append-only triggers are present (expect 11, plus 1 response lock and 1 BOQ lock)'
 select count(*) filter (where tgname like '%append_only') as append_only_triggers,
-       count(*) filter (where tgname = 'submittal_revisions_response_locked') as response_lock
+       count(*) filter (where tgname = 'submittal_revisions_response_locked') as response_lock,
+       count(*) filter (where tgname = 'boq_lines_frozen_when_confirmed') as boq_lock
 from pg_trigger;
 
 \echo '3. Foreign keys are all validated (expect 0 rows)'
@@ -27,3 +28,7 @@ select (select count(*) from material_requests) as material_requests, (select co
 select (select count(*) from rfis) as rfis, (select count(*) from rfi_events) as rfi_events, (select count(*) from submittals) as submittals,
        (select count(*) from submittal_revisions) as submittal_revisions, (select count(*) from drawing_revisions) as drawing_revisions,
        (select count(*) from site_reports) as site_reports, (select count(*) from project_progress_updates) as progress_updates;
+
+\echo '7. Contract, BOQ and programme records'
+select (select count(*) from contracts) as contracts, (select count(*) from boq_lines) as boq_lines, (select count(*) from boq_measurements) as boq_measurements,
+       (select count(*) from programme_baselines) as baselines, (select count(*) from programme_activities) as activities, (select count(*) from activity_progress) as activity_progress;

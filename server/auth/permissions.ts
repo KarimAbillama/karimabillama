@@ -34,6 +34,10 @@ export const PERMISSIONS = {
   "rfi.create": "Raise and edit RFIs and send them for internal review",
   "rfi.issue": "Review RFIs, issue them to the consultant, record responses and close them",
   "drawing.manage": "Register drawings and record new revisions",
+  "contract.view": "See contract terms, values, BOQ rates and the value of work done",
+  "contract.manage": "Record contract terms, guarantees and insurances; import and confirm the contract BOQ; set cost budgets",
+  "programme.manage": "Import programme baselines (Primavera P6 or CSV)",
+  "site.progress": "Update activity progress and measured BOQ quantities from site",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

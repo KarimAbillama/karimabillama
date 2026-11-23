@@ -804,3 +804,180 @@ export const rfiEvents = pgTable("rfi_events", {
   userId: uuid("user_id").notNull().references(() => users.id),
   at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index("rfi_events_rfi_idx").on(t.rfiId)]);
+
+// ───────────────────────────── Contract, BOQ, budget and programme ─────────────────────────────
+
+export type BoqStatus = "none" | "draft" | "confirmed";
+
+/** The main contract with the client: one per project. Terms are recorded, never assumed (A-44). */
+export const contracts = pgTable("contracts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  contractNo: text("contract_no").notNull(),
+  title: text("title"),
+  // Free text as written in the contract, e.g. "FIDIC 1999 Red Book (amended)", "Client bespoke".
+  form: text("form"),
+  signedDate: date("signed_date", { mode: "string" }),
+  commencementDate: date("commencement_date", { mode: "string" }),
+  completionDate: date("completion_date", { mode: "string" }),
+  contractValue: money("contract_value").notNull(),
+  retentionPct: numeric("retention_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+  retentionLimitPct: numeric("retention_limit_pct", { precision: 5, scale: 2 }),
+  advancePct: numeric("advance_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+  ldPerDay: money("ld_per_day"),
+  ldCapPct: numeric("ld_cap_pct", { precision: 5, scale: 2 }),
+  defectsLiabilityMonths: integer("defects_liability_months"),
+  paymentTermsDays: integer("payment_terms_days"),
+  notes: text("notes"),
+  boqStatus: text("boq_status").notNull().default("none").$type<BoqStatus>(),
+  boqSourceName: text("boq_source_name"),
+  boqConfirmedAt: ts("boq_confirmed_at"),
+  boqConfirmedBy: uuid("boq_confirmed_by").references(() => users.id),
+  boqConfirmNote: text("boq_confirm_note"),
+  version: integer("version").notNull().default(1),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  unique("contracts_project_unique").on(t.projectId),
+  check("contracts_boq_status_chk", sql`${t.boqStatus} in ('none','draft','confirmed')`),
+  check("contracts_pct_chk", sql`${t.retentionPct} between 0 and 100 and ${t.advancePct} between 0 and 100 and coalesce(${t.retentionLimitPct}, 0) between 0 and 100 and coalesce(${t.ldCapPct}, 0) between 0 and 100`),
+  check("contracts_value_chk", sql`${t.contractValue} >= 0 and coalesce(${t.ldPerDay}, 0) >= 0`),
+  check("contracts_dates_chk", sql`${t.completionDate} is null or ${t.commencementDate} is null or ${t.completionDate} >= ${t.commencementDate}`),
+]);
+
+export type SecurityKind = "performance_bond" | "advance_payment_guarantee" | "retention_bond" | "car_insurance" | "third_party_insurance" | "workmen_compensation" | "professional_indemnity" | "other";
+
+/** Bank guarantees and insurance policies under the contract, tracked for expiry. */
+export const contractSecurities = pgTable("contract_securities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  contractId: uuid("contract_id").notNull().references(() => contracts.id),
+  kind: text("kind").notNull().$type<SecurityKind>(),
+  reference: text("reference").notNull(),
+  issuer: text("issuer"),
+  amount: money("amount"),
+  issueDate: date("issue_date", { mode: "string" }),
+  expiryDate: date("expiry_date", { mode: "string" }).notNull(),
+  status: text("status").notNull().default("active").$type<"active" | "released">(),
+  releasedDate: date("released_date", { mode: "string" }),
+  notes: text("notes"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: createdAt(),
+}, (t) => [
+  index("contract_securities_contract_idx").on(t.contractId),
+  check("contract_securities_kind_chk", sql`${t.kind} in ('performance_bond','advance_payment_guarantee','retention_bond','car_insurance','third_party_insurance','workmen_compensation','professional_indemnity','other')`),
+  check("contract_securities_status_chk", sql`${t.status} in ('active','released') and (${t.status} = 'released') = (${t.releasedDate} is not null)`),
+  check("contract_securities_amount_chk", sql`coalesce(${t.amount}, 0) >= 0`),
+]);
+
+/**
+ * Contract BOQ lines. While the BOQ is a draft it can be re-imported; once confirmed it is frozen by a
+ * trigger and changes only through variations (next module).
+ */
+export const boqLines = pgTable("boq_lines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  contractId: uuid("contract_id").notNull().references(() => contracts.id),
+  lineNo: integer("line_no").notNull(),
+  kind: text("kind").notNull().$type<"heading" | "item" | "provisional_sum">(),
+  ref: text("ref"),
+  description: text("description").notNull(),
+  unit: text("unit"),
+  qty: qty("qty"),
+  rate: rate("rate"),
+  amount: money("amount"),
+  costCodeId: uuid("cost_code_id").references(() => costCodes.id),
+  // The heading the line sits under, for grouping and the bill summary.
+  section: text("section"),
+}, (t) => [
+  unique("boq_lines_line_unique").on(t.contractId, t.lineNo),
+  check("boq_lines_kind_chk", sql`${t.kind} in ('heading','item','provisional_sum')`),
+  check("boq_lines_shape_chk", sql`(${t.kind} = 'heading' and ${t.amount} is null and ${t.qty} is null)
+    or (${t.kind} = 'item' and ${t.unit} is not null and ${t.qty} > 0 and ${t.rate} >= 0 and ${t.amount} is not null)
+    or (${t.kind} = 'provisional_sum' and ${t.amount} is not null and ${t.qty} is null)`),
+]);
+
+/** Quantity done to date on a BOQ item (cumulative), as measured on site. Append-only history. */
+export const boqMeasurements = pgTable("boq_measurements", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  boqLineId: uuid("boq_line_id").notNull().references(() => boqLines.id),
+  asOfDate: date("as_of_date", { mode: "string" }).notNull(),
+  qtyToDate: qty("qty_to_date").notNull(),
+  remark: text("remark"),
+  recordedBy: uuid("recorded_by").notNull().references(() => users.id),
+  recordedAt: createdAt(),
+}, (t) => [
+  index("boq_measurements_line_idx").on(t.boqLineId, t.asOfDate),
+  check("boq_measurements_qty_chk", sql`${t.qtyToDate} >= 0`),
+]);
+
+/** Cost budget per cost code (what EDGE expects to spend), compared with purchase commitments. */
+export const projectBudgets = pgTable("project_budgets", {
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  costCodeId: uuid("cost_code_id").notNull().references(() => costCodes.id),
+  amount: money("amount").notNull(),
+  note: text("note"),
+  updatedBy: uuid("updated_by").notNull().references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.projectId, t.costCodeId] }), check("project_budgets_amount_chk", sql`${t.amount} >= 0`)]);
+
+/** A programme baseline imported from P6 (or a CSV activity list). Older baselines are kept. */
+export const programmeBaselines = pgTable("programme_baselines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  name: text("name").notNull(),
+  source: text("source").notNull().$type<"p6_xer" | "csv">(),
+  fileName: text("file_name"),
+  p6ProjectCode: text("p6_project_code"),
+  dataDate: date("data_date", { mode: "string" }),
+  plannedStart: date("planned_start", { mode: "string" }).notNull(),
+  plannedFinish: date("planned_finish", { mode: "string" }).notNull(),
+  activityCount: integer("activity_count").notNull(),
+  isCurrent: boolean("is_current").notNull().default(true),
+  notes: text("notes"),
+  importedBy: uuid("imported_by").notNull().references(() => users.id),
+  importedAt: createdAt(),
+}, (t) => [
+  uniqueIndex("programme_baselines_current_unique").on(t.projectId).where(sql`${t.isCurrent}`),
+  check("programme_baselines_source_chk", sql`${t.source} in ('p6_xer','csv')`),
+]);
+
+/** Activities of a baseline, as imported (append-only). */
+export const programmeActivities = pgTable("programme_activities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  baselineId: uuid("baseline_id").notNull().references(() => programmeBaselines.id),
+  sortOrder: integer("sort_order").notNull(),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  wbsCode: text("wbs_code"),
+  wbsName: text("wbs_name"),
+  plannedStart: date("planned_start", { mode: "string" }).notNull(),
+  plannedFinish: date("planned_finish", { mode: "string" }).notNull(),
+  durationDays: integer("duration_days").notNull(),
+  isMilestone: boolean("is_milestone").notNull().default(false),
+  weight: numeric("weight", { precision: 18, scale: 4 }).notNull(),
+}, (t) => [
+  unique("programme_activities_code_unique").on(t.baselineId, t.code),
+  check("programme_activities_dates_chk", sql`${t.plannedFinish} >= ${t.plannedStart}`),
+  check("programme_activities_weight_chk", sql`${t.weight} >= 0`),
+]);
+
+/**
+ * Progress on site per activity (replaces the site engineers' Excel). Keyed by the P6 activity ID so
+ * it carries over when the programme is re-baselined. Append-only: the latest entry is the status.
+ */
+export const activityProgress = pgTable("activity_progress", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  activityCode: text("activity_code").notNull(),
+  asOfDate: date("as_of_date", { mode: "string" }).notNull(),
+  pctComplete: numeric("pct_complete", { precision: 5, scale: 2 }).notNull(),
+  actualStart: date("actual_start", { mode: "string" }),
+  actualFinish: date("actual_finish", { mode: "string" }),
+  remark: text("remark"),
+  recordedBy: uuid("recorded_by").notNull().references(() => users.id),
+  recordedAt: createdAt(),
+}, (t) => [
+  index("activity_progress_project_idx").on(t.projectId, t.activityCode, t.asOfDate),
+  check("activity_progress_pct_chk", sql`${t.pctComplete} between 0 and 100`),
+  check("activity_progress_dates_chk", sql`${t.actualFinish} is null or (${t.actualStart} is not null and ${t.actualFinish} >= ${t.actualStart})`),
+]);

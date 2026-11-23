@@ -220,3 +220,36 @@ a.chip:hover { text-decoration: none; filter: brightness(0.97); }
 .narrow-form { max-width: 420px; display: flex; flex-direction: column; gap: 0.75rem; }
 .notice.ok { background: var(--green-bg); color: var(--green); }
 a.user-name { color: #fff; }
+
+/* Contract, BOQ and programme */
+.kpi-red { border-left: 4px solid var(--red); }
+.kpi-amber { border-left: 4px solid #d4a017; }
+.kpi-green { border-left: 4px solid var(--green); }
+.measure-bar { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; position: sticky; top: 0.5rem; z-index: 2; }
+.measure-bar label { display: flex; gap: 0.4rem; align-items: center; font-weight: 600; }
+.measure-bar input { width: auto; }
+.measure-input { display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-end; }
+.measure-input input { max-width: 120px; text-align: right; }
+table.boq .boq-heading td { background: var(--grey-bg); font-weight: 700; }
+table.programme td input[type="date"] { min-width: 140px; }
+.pct-input { max-width: 80px; text-align: right; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; min-width: 0 !important; flex-wrap: wrap; }
+.seg button { border: 0; background: #fff; padding: 0.45rem 0.75rem; font: inherit; font-size: 0.88rem; cursor: pointer; color: var(--text); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--brand); color: #fff; }
+.bar { position: relative; height: 6px; background: var(--grey-bg); border-radius: 3px; margin-top: 4px; min-width: 70px; }
+.bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+.bar i { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--brand); }
+.scurve { margin: 0; }
+.scurve svg { width: 100%; height: auto; max-height: 300px; display: block; }
+.scurve text { font-size: 11px; fill: var(--muted); }
+.scurve .grid { stroke: var(--line); stroke-width: 1; }
+.scurve .planned { fill: none; stroke: var(--brand); stroke-width: 2; stroke-dasharray: 6 4; }
+.scurve .actual { fill: none; stroke: var(--accent); stroke-width: 3; }
+.scurve .actual-dot { fill: var(--accent); }
+.scurve .today { stroke: var(--red); stroke-width: 1; stroke-dasharray: 3 3; }
+.scurve .today-label { fill: var(--red); }
+.legend { font-size: 0.85rem; color: var(--muted); display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+.legend .key { display: inline-block; width: 22px; height: 0; border-top: 3px solid var(--accent); margin-left: 0.6rem; }
+.legend .key.planned { border-top: 2px dashed var(--brand); margin-left: 0; }
+.nowrap { white-space: nowrap; }

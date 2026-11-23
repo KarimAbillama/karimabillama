@@ -26,6 +26,9 @@ import { closeRfi, createRfi, issueRfi, recordRfiResponse, sendForReview } from 
 import { SITE_WORKING_DAYS } from "../lib/workdays.js";
 import { weekday } from "../lib/dates.js";
 import { myPendingApprovals } from "../services/approvals.js";
+import { addSecurity, confirmBoq, importBoq, recordMeasurements, saveContract, setBudget, getBoq } from "../services/contracts.js";
+import { importBaseline, recordProgress } from "../services/programme.js";
+import { DEMO_CONTRACTS, DEMO_PROGRAMMES, baselineCsv, progressSnapshots, toCsv as demoCsv } from "./demoContractData.js";
 
 export const DEMO_PASSWORD = "Demo@2026!";
 
@@ -100,7 +103,8 @@ export async function demoSeed(db: DB) {
   const seB = await mkUser("engineer.villa@demo.edge.test", "Demo Site Engineer Villa", "Site Engineer", ["site_engineer"], [p102.id]);
   const proc = await mkUser("procurement@demo.edge.test", "Demo Procurement Officer", "Procurement Officer", ["procurement_officer"]);
   const store = await mkUser("stores@demo.edge.test", "Demo Central Storekeeper", "Storekeeper", ["storekeeper"], [p101.id, p102.id, p103.id]);
-  await mkUser("qs@demo.edge.test", "Demo Quantity Surveyor", "Quantity Surveyor", ["quantity_surveyor"], [p101.id, p102.id]);
+  const qs = await mkUser("qs@demo.edge.test", "Demo Quantity Surveyor", "Quantity Surveyor", ["quantity_surveyor"], [p101.id, p102.id]);
+  const planner = await mkUser("planner@demo.edge.test", "Demo Planning Engineer", "Planning Engineer", ["planning_engineer"], [p101.id, p102.id]);
   await mkUser("accounts@demo.edge.test", "Demo Accountant", "Accountant", ["accountant"]);
   await mkUser("viewer@demo.edge.test", "Demo Management Viewer", "Management", ["management_viewer"]);
   void director;
@@ -228,6 +232,7 @@ export async function demoSeed(db: DB) {
   await cancelMr(db, seA, mr6.id, "Duplicate of another request");
 
   await projectControlDemo(db, { p101, p102, p103, s101, s102, s103, se, seB, pmA, pmB, ops, paint, tile, drip, paver, cable });
+  await contractProgrammeDemo(db, { p101, p102, qs, planner, se, seB, pmA, pmB });
 
   console.log(`Demo data loaded. All demo users share the password: ${DEMO_PASSWORD}`);
 }
@@ -377,6 +382,47 @@ async function projectControlDemo(db: DB, r: {
     { issue: -20, answer: [-16, "600 mm minimum to top of sleeve."], close: [-15, "Installed at 600 mm and inspected."] });
   await rfiDemo(pmB, r.p103.id, { discipline: "electrical", subject: "Cable tray support spacing", question: "Specification says 1.5 m, the tray manufacturer allows 2.0 m. Which applies?",
     location: "Zone B", drawingRevisionId: ele["0"], originatorCompanyId: mep.id }, { issue: -2 });
+}
+
+/** Contracts, BOQs, cost budget, P6-style programme baselines and site progress (all invented; see demoContractData.ts). */
+async function contractProgrammeDemo(db: DB, r: { p101: Row; p102: Row; qs: Row; planner: Row; se: Row; seB: Row; pmA: Row; pmB: Row }) {
+  const today = businessToday();
+  const d = (n: number) => addDays(today, n);
+  const A = async (u: Row) => (await loadActor(db, u.id)) as Actor;
+  const qs = await A(r.qs), planner = await A(r.planner), se = await A(r.se), seB = await A(r.seB), pmB = await A(r.pmB);
+  const projectOf = { "DEMO-101": r.p101.id, "DEMO-102": r.p102.id };
+  const code = async (c: string) => (await db.select().from(costCodes).where(eq(costCodes.code, c)))[0].id;
+
+  for (const c of DEMO_CONTRACTS) {
+    const projectId = projectOf[c.project];
+    const who = c.project === "DEMO-101" ? qs : pmB;
+    const t = c.terms;
+    await saveContract(db, who, projectId, {
+      contractNo: t.contractNo, title: t.title, form: t.form, signedDate: d(t.signed), commencementDate: d(t.commencement), completionDate: d(t.completion),
+      contractValue: t.contractValue, retentionPct: t.retentionPct, retentionLimitPct: t.retentionLimitPct ?? null, advancePct: t.advancePct, ldPerDay: t.ldPerDay, ldCapPct: t.ldCapPct,
+      defectsLiabilityMonths: t.defectsLiabilityMonths, paymentTermsDays: t.paymentTermsDays, notes: t.notes ?? null,
+    });
+    for (const s of c.securities) await addSecurity(db, who, projectId, { kind: s.kind, reference: s.reference, issuer: s.issuer, amount: s.amount ?? null, issueDate: d(s.issued), expiryDate: d(s.expires) });
+    const imp = await importBoq(db, who, projectId, { csv: demoCsv(c.boq), fileName: c.boqFile });
+    if (!imp.ok) throw new Error(`Demo BOQ ${c.project}: ${imp.problems.join("; ")}`);
+    if (!c.confirm) continue;
+    await confirmBoq(db, who, projectId, {});
+    const lines = (await getBoq(db, who, projectId)).lines;
+    for (const m of c.measurements) {
+      await recordMeasurements(db, se, projectId, { asOfDate: d(m.at), rows: Object.entries(m.qty).map(([ref, q]) => ({ boqLineId: lines.find((l) => l.ref === ref)!.id, qtyToDate: q })) });
+    }
+    if (c.budget.length) await setBudget(db, who, projectId, await Promise.all(c.budget.map(async (b) => ({ costCodeId: await code(b.costCode), amount: b.amount, note: b.note ?? null }))));
+  }
+
+  for (const p of DEMO_PROGRAMMES) {
+    const projectId = projectOf[p.project];
+    const b = await importBaseline(db, p.project === "DEMO-101" ? planner : pmB, projectId, { format: "csv", text: baselineCsv(p, d), fileName: p.fileName, name: "Baseline rev 0 (demo)" });
+    if (!b.ok) throw new Error(`Demo baseline ${p.project}: ${b.problems.join("; ")}`);
+    for (const snap of progressSnapshots(p, d)) {
+      const res = await recordProgress(db, p.project === "DEMO-101" ? se : seB, projectId, snap);
+      if (!res.ok) throw new Error(`Demo progress ${p.project}: ${res.problems.join("; ")}`);
+    }
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

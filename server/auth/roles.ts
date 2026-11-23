@@ -17,22 +17,22 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
   {
     key: "director", name: "Owner / Director", allProjects: true,
     description: "Company-wide visibility including costs; final approver for high-value purchases.",
-    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "po.approve", "mr.approve", "report.export", "audit.view", "submittal.view", "sitereport.review", "rfi.view"],
+    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "po.approve", "mr.approve", "report.export", "audit.view", "submittal.view", "sitereport.review", "rfi.view", "contract.view"],
   },
   {
     key: "operations_manager", name: "Operations Manager", allProjects: true,
     description: "Oversees all projects; second-level purchase approval.",
-    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "po.approve", "mr.approve", "report.export", "stock.adjust", "audit.view", "submittal.view", "sitereport.review", "progress.update", "rfi.view"],
+    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "po.approve", "mr.approve", "report.export", "stock.adjust", "audit.view", "submittal.view", "sitereport.review", "progress.update", "rfi.view", "contract.view", "contract.manage", "programme.manage", "site.progress"],
   },
   {
     key: "project_manager", name: "Project Manager", allProjects: false,
     description: "Runs assigned projects; approves material requests and first-level purchases.",
-    permissions: [...VIEW_BASICS, "mr.create", "mr.approve", "po.approve", "rates.view", "cost.view", "report.export", "submittal.view", "submittal.manage", "sitereport.create", "sitereport.review", "progress.update", "rfi.view", "rfi.create", "rfi.issue", "drawing.manage"],
+    permissions: [...VIEW_BASICS, "mr.create", "mr.approve", "po.approve", "rates.view", "cost.view", "report.export", "submittal.view", "submittal.manage", "sitereport.create", "sitereport.review", "progress.update", "rfi.view", "rfi.create", "rfi.issue", "drawing.manage", "contract.view", "contract.manage", "programme.manage", "site.progress"],
   },
   {
     key: "site_engineer", name: "Site Engineer", allProjects: false,
     description: "Raises material requests and receives deliveries on assigned sites. No supplier prices.",
-    permissions: [...VIEW_BASICS, "mr.create", "stock.receive", "submittal.view", "sitereport.create", "rfi.view", "rfi.create"],
+    permissions: [...VIEW_BASICS, "mr.create", "stock.receive", "submittal.view", "sitereport.create", "rfi.view", "rfi.create", "site.progress"],
   },
   {
     key: "foreman", name: "Foreman", allProjects: false,
@@ -43,6 +43,11 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
     key: "document_controller", name: "Document Controller", allProjects: false,
     description: "Keeps the submittal, sample and mock-up register for assigned projects and records consultant responses.",
     permissions: [...VIEW_BASICS, "submittal.view", "submittal.manage", "rfi.view", "rfi.create", "rfi.issue", "drawing.manage"],
+  },
+  {
+    key: "planning_engineer", name: "Planning Engineer", allProjects: false,
+    description: "Imports the P6 programme baseline and keeps activity progress up to date for assigned projects.",
+    permissions: [...VIEW_BASICS, "programme.manage", "site.progress", "progress.update", "submittal.view", "rfi.view"],
   },
   {
     key: "procurement_officer", name: "Procurement Officer", allProjects: true,
@@ -57,16 +62,16 @@ export const ROLE_TEMPLATES: RoleTemplate[] = [
   {
     key: "quantity_surveyor", name: "Quantity Surveyor", allProjects: false,
     description: "Commercial view of assigned projects (costs, commitments).",
-    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "report.export", "submittal.view", "rfi.view"],
+    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "report.export", "submittal.view", "rfi.view", "contract.view", "contract.manage", "site.progress"],
   },
   {
     key: "accountant", name: "Accountant", allProjects: true,
     description: "Read-only commercial view for reconciliation and exports.",
-    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "report.export", "audit.view"],
+    permissions: [...VIEW_BASICS, "rates.view", "cost.view", "report.export", "audit.view", "contract.view"],
   },
   {
     key: "management_viewer", name: "Management (read-only)", allProjects: true,
     description: "Read-only dashboards and reports across all projects.",
-    permissions: [...VIEW_BASICS, "cost.view", "submittal.view", "rfi.view"],
+    permissions: [...VIEW_BASICS, "cost.view", "submittal.view", "rfi.view", "contract.view"],
   },
 ];

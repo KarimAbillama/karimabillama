@@ -25,6 +25,8 @@ import * as sr from "./services/siteReports.js";
 import * as rfi from "./services/rfis.js";
 import * as dwg from "./services/drawings.js";
 import { addProgressUpdate, overview, progressHistory } from "./services/overview.js";
+import * as ct from "./services/contracts.js";
+import * as prg from "./services/programme.js";
 
 const uuid = z.string().uuid();
 const decimalStr = z.union([z.string(), z.number()]).transform((v) => String(v).trim()).refine((v) => /^-?\d+(\.\d+)?$/.test(v), "Must be a number");
@@ -66,6 +68,24 @@ const siteReportBody = z.object({
   safetyIncidents: z.number().int().min(0).max(100).default(0), safetyNotes: optText,
   manpower: z.array(z.object({ trade: z.string().trim().min(1).max(100), companyId: uuid.nullish(), headcount: z.number().int().min(1).max(5000) })).max(100),
 });
+
+const pct = decimalStr;
+const optDecimal = z.union([z.string(), z.number()]).nullish().transform((v) => (v === null || v === undefined || String(v).trim() === "" ? null : String(v).trim()))
+  .refine((v) => v === null || /^-?\d+(\.\d+)?$/.test(v), "Must be a number");
+const contractBody = z.object({
+  contractNo: z.string().trim().min(1).max(100), title: optText, form: optText, signedDate: isoDate.nullish(), commencementDate: isoDate.nullish(), completionDate: isoDate.nullish(),
+  contractValue: decimalStr, retentionPct: pct, retentionLimitPct: optDecimal, advancePct: pct, ldPerDay: optDecimal, ldCapPct: optDecimal,
+  defectsLiabilityMonths: z.number().int().min(0).max(120).nullish(), paymentTermsDays: z.number().int().min(0).max(365).nullish(), notes: optText, version: z.number().int().optional(),
+});
+const securityBody = z.object({
+  kind: z.enum(ct.SECURITY_KINDS), reference: z.string().trim().min(1).max(100), issuer: optText, amount: optDecimal, issueDate: isoDate.nullish(), expiryDate: isoDate, notes: optText,
+});
+const progressRow = z.object({
+  activityCode: z.string().trim().min(1).max(60), pctComplete: decimalStr, actualStart: isoDate.nullish().transform((v) => v ?? null),
+  actualFinish: isoDate.nullish().transform((v) => v ?? null), remark: optText.transform((v) => v ?? null),
+});
+/** Programme and BOQ files can be several MB. */
+const BIG = { bodyLimit: 30_000_000 };
 
 const actorOf = (req: { actor: Actor | null }) => req.actor!;
 
@@ -443,6 +463,57 @@ export async function registerRoutes(app: FastifyInstance, db: DB) {
     const b = z.object({ decision: z.enum(["accept", "return"]), comment: optText }).parse(req.body);
     await sr.reviewSiteReport(db, actorOf(req), idParam.parse(req.params).id, b.decision, b.comment);
     return { ok: true };
+  });
+
+  // ───────────── Contract, BOQ and budget ─────────────
+  const projectParam = z.object({ projectId: uuid });
+  const pid = (req: { params: unknown }) => projectParam.parse(req.params).projectId;
+  app.get("/api/projects/:projectId/contract", async (req) => ct.getContract(db, actorOf(req), pid(req)));
+  app.put("/api/projects/:projectId/contract", async (req) => ct.saveContract(db, actorOf(req), pid(req), contractBody.parse(req.body)));
+  app.post("/api/projects/:projectId/contract/securities", async (req) => ct.addSecurity(db, actorOf(req), pid(req), securityBody.parse(req.body)));
+  app.post("/api/contract-securities/:id/release", async (req) => {
+    const b = z.object({ releasedDate: isoDate, note: optText }).parse(req.body);
+    await ct.releaseSecurity(db, actorOf(req), idParam.parse(req.params).id, b);
+    return { ok: true };
+  });
+  app.post("/api/projects/:projectId/boq/import", BIG, async (req) => {
+    const b = z.object({ csv: z.string().min(1), fileName: optText, dryRun: z.boolean().default(false) }).parse(req.body);
+    return ct.importBoq(db, actorOf(req), pid(req), b);
+  });
+  app.post("/api/projects/:projectId/boq/confirm", async (req) => ct.confirmBoq(db, actorOf(req), pid(req), z.object({ note: optText }).parse(req.body ?? {})));
+  app.get("/api/projects/:projectId/boq", async (req) => ct.getBoq(db, actorOf(req), pid(req)));
+  app.post("/api/projects/:projectId/boq/measurements", async (req) => {
+    const b = z.object({ asOfDate: isoDate, rows: z.array(z.object({ boqLineId: uuid, qtyToDate: decimalStr, remark: optText })).min(1).max(10000) }).parse(req.body);
+    return ct.recordMeasurements(db, actorOf(req), pid(req), b);
+  });
+  app.get("/api/boq-lines/:id/measurements", async (req) => ct.measurementHistory(db, actorOf(req), idParam.parse(req.params).id));
+  app.get("/api/projects/:projectId/budget", async (req) => ct.getBudget(db, actorOf(req), pid(req)));
+  app.put("/api/projects/:projectId/budget", async (req) => {
+    const b = z.object({ rows: z.array(z.object({ costCodeId: uuid, amount: decimalStr, note: optText })).max(500) }).parse(req.body);
+    return ct.setBudget(db, actorOf(req), pid(req), b.rows);
+  });
+
+  // ───────────── Programme (P6 baseline) and site progress ─────────────
+  app.get("/api/projects/:projectId/programme", async (req) => prg.getProgramme(db, actorOf(req), pid(req)));
+  app.post("/api/projects/:projectId/programme/baselines", BIG, async (req) => {
+    const b = z.object({ format: z.enum(["xer", "csv"]), text: z.string().min(1), fileName: optText, name: z.string().trim().min(1).max(100), notes: optText, dryRun: z.boolean().default(false) }).parse(req.body);
+    return prg.importBaseline(db, actorOf(req), pid(req), b);
+  });
+  app.post("/api/projects/:projectId/programme/progress", async (req) => {
+    const b = z.object({ asOfDate: isoDate, rows: z.array(progressRow).min(1).max(10000) }).parse(req.body);
+    return prg.recordProgress(db, actorOf(req), pid(req), { ...b, source: "screen" });
+  });
+  app.post("/api/projects/:projectId/programme/progress/import", BIG, async (req) => {
+    const b = z.object({ asOfDate: isoDate, csv: z.string().min(1) }).parse(req.body);
+    return prg.importProgressCsv(db, actorOf(req), pid(req), b);
+  });
+  app.get("/api/projects/:projectId/programme/progress.csv", async (req, reply) => {
+    const { csv, fileName } = await prg.progressSheetCsv(db, actorOf(req), pid(req));
+    return sendCsv(reply, fileName, csv);
+  });
+  app.get("/api/projects/:projectId/programme/activities/:code/history", async (req) => {
+    const p = z.object({ projectId: uuid, code: z.string().min(1).max(60) }).parse(req.params);
+    return prg.activityHistory(db, actorOf(req), p.projectId, p.code);
   });
 
   /** Document history visible to anyone who can see the document itself. */

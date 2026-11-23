@@ -255,6 +255,49 @@ try {
     await pm.close();
   });
 
+  await step("the site engineer updates activity progress against the P6 baseline", async () => {
+    const { page, close } = await session("engineer.marina@demo.edge.test");
+    await page.getByRole("link", { name: "Programme & progress" }).click();
+    await selectProject(page);
+    await page.getByText("S-curve: planned vs actual").waitFor();
+    await page.screenshot({ path: `${SHOTS}/15-programme.png`, fullPage: true });
+    await page.getByRole("button", { name: "Update progress" }).click();
+    await page.getByLabel("% complete A1120").fill("50");
+    await page.getByLabel("Remark A1120").fill("Levels 21–24 done");
+    await page.screenshot({ path: `${SHOTS}/16-programme-update.png`, fullPage: true });
+    await page.getByRole("button", { name: "Save progress" }).click();
+    await page.getByText("Saved progress on 1 activity").waitFor();
+    await page.getByRole("tab", { name: /^All/ }).click();
+    await page.getByRole("button", { name: "50%" }).click();
+    await page.getByText("Levels 21–24 done").first().waitFor();
+    await close();
+  });
+
+  await step("site measures BOQ quantities without seeing rates; the QS sees the value and confirms a draft BOQ", async () => {
+    const se = await session("engineer.marina@demo.edge.test");
+    await se.page.getByRole("link", { name: "BOQ & measurement" }).click();
+    await selectProject(se.page);
+    await se.page.getByText("Rates and amounts are hidden for your role.").waitFor();
+    await se.page.getByRole("button", { name: "Record quantities done" }).click();
+    await se.page.getByLabel("Quantity to date 2.01").fill("15200");
+    await se.page.getByRole("button", { name: /^Save 1 measurement/ }).click();
+    await se.page.getByText("Saved 1 measurement.").waitFor();
+    await se.close();
+
+    const qs = await session("qs@demo.edge.test");
+    await qs.page.getByRole("link", { name: "BOQ & measurement" }).click();
+    await selectProject(qs.page);
+    await qs.page.getByText("Work done to date").waitFor();
+    await qs.page.screenshot({ path: `${SHOTS}/17-boq.png`, fullPage: true });
+    await qs.page.getByRole("link", { name: "Contract", exact: true }).first().click();
+    await qs.page.getByText("Bonds, guarantees and insurances").waitFor();
+    await qs.page.screenshot({ path: `${SHOTS}/18-contract.png`, fullPage: true });
+    await qs.page.getByLabel("Project").first().selectOption({ label: "DEMO-102 — Palm Grove Villa — Landscape, Hardscape & Pool (Demo)" });
+    await qs.page.getByRole("button", { name: "Confirm contract BOQ" }).click();
+    await qs.page.getByText("Confirmed", { exact: true }).waitFor();
+    await qs.close();
+  });
+
   await step("home dashboard on a phone", async () => {
     const { page, close } = await session("stores@demo.edge.test", { width: 390, height: 844 });
     await page.screenshot({ path: `${SHOTS}/09-home-storekeeper-phone.png`, fullPage: true });

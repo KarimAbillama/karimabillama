@@ -23,6 +23,8 @@ import { lineFulfilment } from "./materialRequests.js";
 import { drillRows } from "./reports.js";
 import { submittalState } from "./submittals.js";
 import { rfiState } from "./rfis.js";
+import { programmeSnapshot } from "./programme.js";
+import { contractSnapshot } from "./contracts.js";
 
 /** PROPOSED thresholds (A-33). */
 export const RAG = {
@@ -81,6 +83,9 @@ export async function overview(db: DbOrTx, actor: Actor) {
   const none = ids.length === 0;
   const showCost = can(actor, "cost.view");
   const showSubmittals = can(actor, "submittal.view");
+  const showContract = can(actor, "contract.view");
+  const programmes = await programmeSnapshot(db, ids);
+  const contractsByProject = showContract ? await contractSnapshot(db, ids) : new Map();
 
   // Latest progress per project.
   const progress = none ? [] : await db.select().from(projectProgressUpdates).where(inArray(projectProgressUpdates.projectId, ids))
@@ -115,17 +120,33 @@ export async function overview(db: DbOrTx, actor: Actor) {
     const pu = progress.find((u) => u.projectId === p.id);
     let programmeRag: Rag = "none";
     let programme = null;
-    if (pu) {
+    const ps = programmes.get(p.id);
+    if (ps) {
+      // From the P6 baseline and the activity progress recorded on site.
+      const variance = dec(ps.actualPct).minus(ps.plannedPct);
+      const asOf = ps.lastUpdate ?? ps.plannedFinish;
+      const stale = !ps.lastUpdate || daysBetween(ps.lastUpdate, today) > RAG.progressStaleDays;
+      const endDate = p.plannedEndDate ?? ps.plannedFinish;
+      const lateFinish = ps.forecastFinish > endDate;
+      programmeRag = variance.lte(-RAG.programmeRedBehindPct) || lateFinish ? "red" : variance.lte(-RAG.programmeAmberBehindPct) || stale ? "amber" : "green";
+      programme = { source: "baseline" as const, baselineName: ps.baselineName, asOf, plannedPct: dec(ps.plannedPct).toFixed(2), actualPct: dec(ps.actualPct).toFixed(2), variancePct: variance.toFixed(2),
+        daysAheadBehind: ps.daysAheadBehind, lateActivities: ps.lateActivities, forecastEndDate: ps.forecastFinish, plannedEndDate: endDate, lateFinish, stale,
+        summary: pu?.summary ?? null, risks: pu?.risks ?? null, rag: programmeRag };
+      if (variance.lt(0)) attention.push(`Programme: ${variance.abs().toDecimalPlaces(1).toString()} points behind plan${ps.daysAheadBehind !== null && ps.daysAheadBehind < 0 ? ` (about ${-ps.daysAheadBehind} days)` : ""}`);
+      if (lateFinish) attention.push(`Forecast finish ${ps.forecastFinish}, after the contract completion ${endDate}`);
+      if (ps.lateActivities) attention.push(`${ps.lateActivities} activit${ps.lateActivities > 1 ? "ies" : "y"} late to start or finish`);
+      if (stale) attention.push(ps.lastUpdate ? `Activity progress not updated since ${ps.lastUpdate}` : "No activity progress recorded against the baseline yet");
+    } else if (pu) {
       const variance = dec(pu.actualPct).minus(pu.plannedPct);
       const stale = daysBetween(pu.asOfDate, today) > RAG.progressStaleDays;
       const lateFinish = !!pu.forecastEndDate && !!p.plannedEndDate && pu.forecastEndDate > p.plannedEndDate;
       programmeRag = variance.lte(-RAG.programmeRedBehindPct) || lateFinish ? "red" : variance.lte(-RAG.programmeAmberBehindPct) || stale ? "amber" : "green";
-      programme = { asOf: pu.asOfDate, plannedPct: pu.plannedPct, actualPct: pu.actualPct, variancePct: variance.toFixed(2), forecastEndDate: pu.forecastEndDate,
-        plannedEndDate: p.plannedEndDate, lateFinish, stale, summary: pu.summary, risks: pu.risks, rag: programmeRag };
+      programme = { source: "manual" as const, baselineName: null, asOf: pu.asOfDate, plannedPct: pu.plannedPct, actualPct: pu.actualPct, variancePct: variance.toFixed(2),
+        daysAheadBehind: null, lateActivities: 0, forecastEndDate: pu.forecastEndDate, plannedEndDate: p.plannedEndDate, lateFinish, stale, summary: pu.summary, risks: pu.risks, rag: programmeRag };
       if (variance.lt(0)) attention.push(`Programme: ${dec(pu.actualPct).toString()}% done vs ${dec(pu.plannedPct).toString()}% planned`);
       if (lateFinish) attention.push(`Forecast finish ${pu.forecastEndDate}, after the planned ${p.plannedEndDate}`);
       if (stale) attention.push(`Progress not updated since ${pu.asOfDate}`);
-    } else attention.push("No progress update recorded yet");
+    } else attention.push("No programme baseline or progress update yet");
 
     // Approvals
     let approvals = null;
@@ -186,13 +207,18 @@ export async function overview(db: DbOrTx, actor: Actor) {
     if (latePos.length) attention.push(`${latePos.length} late deliveries (worst ${worstLate} days)`);
     if (uncoveredLate) attention.push(`${uncoveredLate} material request line(s) needed within 3 days and not covered`);
 
-    // Money (Phase 1 tracks purchasing only; certificates and payments come next)
+    // Money: purchasing (cost.view) and the contract side (contract.view). Certificates and payments come next.
     let money = null;
-    if (showCost) {
-      const committed = m2(sum((await drillRows(db, p.id, "committed")).map((r) => r.value)));
-      const issued = m2(sum((await drillRows(db, p.id, "issued")).map((r) => r.value)));
-      money = { contractValue: p.contractValue, committed, issuedCost: issued, notTracked: ["certified", "paid", "variations", "retention"] };
+    const cs = contractsByProject.get(p.id);
+    if (showCost || showContract) {
+      const committed = showCost ? m2(sum((await drillRows(db, p.id, "committed")).map((r) => r.value))) : null;
+      const issued = showCost ? m2(sum((await drillRows(db, p.id, "issued")).map((r) => r.value))) : null;
+      money = { contractValue: showContract || showCost ? cs?.contractValue ?? p.contractValue : null, committed, issuedCost: issued,
+        workDone: cs && cs.boqStatus === "confirmed" ? cs.workDone : null, workDonePct: cs && cs.boqStatus === "confirmed" ? cs.workDonePct : null,
+        boqStatus: cs?.boqStatus ?? null, notTracked: ["certified", "paid", "variations", "retention"] };
     }
+    if (cs?.expired) attention.push(`${cs.expired} guarantee/insurance expired`);
+    if (cs?.expiring) attention.push(`${cs.expiring} guarantee/insurance expiring within 30 days`);
 
     rows.push({
       project: { id: p.id, code: p.code, name: p.name, status: p.status, clientName, startDate: p.startDate, plannedEndDate: p.plannedEndDate },

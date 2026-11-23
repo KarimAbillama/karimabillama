@@ -17,6 +17,9 @@ import { SiteReportDetail, SiteReportForm, SiteReportList } from "./pages/SiteRe
 import { RfiDetail, RfiForm, RfiList } from "./pages/Rfis";
 import { DrawingDetail, DrawingForm, DrawingList } from "./pages/Drawings";
 import { ChangePassword } from "./pages/Account";
+import { ContractPage } from "./pages/Contract";
+import { BoqPage } from "./pages/Boq";
+import { ProgrammePage } from "./pages/Programme";
 
 /** Owners and managers who look across all projects start on the overview. */
 const OVERVIEW_FIRST = ["director", "operations_manager", "management_viewer"];
@@ -83,6 +86,9 @@ export function App() {
           <Route path="/drawings" element={<DrawingList />} />
           <Route path="/drawings/new" element={<DrawingForm />} />
           <Route path="/drawings/:id" element={<DrawingDetail />} />
+          <Route path="/programme" element={<ProgrammePage />} />
+          <Route path="/boq" element={<BoqPage />} />
+          <Route path="/contract" element={<ContractPage />} />
           <Route path="/site-reports" element={<SiteReportList />} />
           <Route path="/site-reports/new" element={<SiteReportForm />} />
           <Route path="/site-reports/:id" element={<SiteReportDetail />} />
@@ -123,10 +129,13 @@ function Shell({ children, onLogout }: { children: React.ReactNode; onLogout: ()
     ["/", overviewFirst ? "All projects" : "My day", true],
     [overviewFirst ? "/today" : "/overview", overviewFirst ? "My day" : "All projects", overviewFirst || can("report.view")],
     ["/approvals", "Approvals", can("mr.approve") || can("po.approve")],
-    ["/site-reports", "Daily site reports", can("project.view"), "Project control"],
+    ["/programme", "Programme & progress", can("project.view"), "Project control"],
+    ["/site-reports", "Daily site reports", can("project.view")],
     ["/rfis", "RFIs", can("rfi.view")],
     ["/submittals", "Submittals & mock-ups", can("submittal.view")],
     ["/drawings", "Drawings", can("project.view")],
+    ["/contract", "Contract", can("contract.view"), "Commercial"],
+    ["/boq", "BOQ & measurement", can("project.view") && (can("contract.view") || can("site.progress"))],
     ["/material-requests", "Material requests", can("mr.view"), "Materials"],
     ["/purchase-orders", "Purchase orders", can("po.view")],
     ["/stock", "Stock", can("stock.view")],

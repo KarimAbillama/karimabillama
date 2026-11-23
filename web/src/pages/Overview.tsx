@@ -7,13 +7,13 @@ type Rag = "red" | "amber" | "green" | "none";
 interface ProjectRow {
   project: { id: string; code: string; name: string; status: string; clientName: string | null; startDate: string | null; plannedEndDate: string | null };
   overall: Rag;
-  programme: { asOf: string; plannedPct: string; actualPct: string; variancePct: string; forecastEndDate: string | null; plannedEndDate: string | null; lateFinish: boolean; stale: boolean; summary: string | null; risks: string | null; rag: Rag } | null;
+  programme: { source: "baseline" | "manual"; baselineName: string | null; daysAheadBehind: number | null; lateActivities: number; asOf: string; plannedPct: string; actualPct: string; variancePct: string; forecastEndDate: string | null; plannedEndDate: string | null; lateFinish: boolean; stale: boolean; summary: string | null; risks: string | null; rag: Rag } | null;
   approvals: { total: number; withConsultant: number; overdue: number; maxOverdueDays: number; toResubmit: number; lateForSite: number; approved: number; rag: Rag } | null;
   rfis: { open: number; withConsultant: number; overdue: number; maxOverdueDays: number; blocking: number; toClose: number; rag: Rag } | null;
   site: { lastReportDate: string | null; missingWorkdays: number; headcount: number; delayDays: number; delayCauses: string[]; rag: Rag };
   safety: { incidents: number; rag: Rag };
   supply: { lateDeliveries: number; worstLateDays: number; uncoveredSoon: number; rag: Rag };
-  money: { contractValue: string | null; committed: string; issuedCost: string; notTracked: string[] } | null;
+  money: { contractValue: string | null; committed: string | null; issuedCost: string | null; workDone: string | null; workDonePct: string | null; boqStatus: string | null; notTracked: string[] } | null;
   attention: string[];
 }
 interface OverviewData {
@@ -62,8 +62,10 @@ export function Overview() {
             </div>
 
             <div className="chips">
-              <Chip rag={r.programme?.rag ?? "none"} label="Programme">
-                {r.programme ? <>{pct(r.programme.actualPct)} done vs {pct(r.programme.plannedPct)} planned{r.programme.lateFinish ? ` · finish ${fmtDate(r.programme.forecastEndDate)}` : ""}</> : "No progress update yet"}
+              <Chip rag={r.programme?.rag ?? "none"} label="Programme" to={`/programme?project=${r.project.id}`}>
+                {r.programme ? <>{pct(r.programme.actualPct)} done vs {pct(r.programme.plannedPct)} planned
+                  {r.programme.daysAheadBehind !== null && r.programme.daysAheadBehind < 0 ? ` · ${-r.programme.daysAheadBehind} days behind` : ""}
+                  {r.programme.lateFinish ? ` · finish ${fmtDate(r.programme.forecastEndDate)}` : ""}</> : "No baseline or progress yet"}
               </Chip>
               {r.approvals && (
                 <Chip rag={r.approvals.rag} label="Approvals" to={`/submittals?project=${r.project.id}`}>
@@ -92,21 +94,23 @@ export function Overview() {
               <div className="money">
                 {r.money ? (<>
                   <div><span className="muted small">Contract value</span><strong>{fmtMoney(r.money.contractValue)}</strong></div>
-                  <div><span className="muted small">Materials committed</span><strong>{fmtMoney(r.money.committed)}</strong></div>
-                  <div><span className="muted small">Materials used</span><strong>{fmtMoney(r.money.issuedCost)}</strong></div>
+                  {r.money.workDone !== null && <div><span className="muted small">Work done (measured)</span><strong>{fmtMoney(r.money.workDone)} <span className="muted small">{r.money.workDonePct}%</span></strong></div>}
+                  {r.money.committed !== null && <div><span className="muted small">Materials committed</span><strong>{fmtMoney(r.money.committed)}</strong></div>}
+                  {r.money.issuedCost !== null && <div><span className="muted small">Materials used</span><strong>{fmtMoney(r.money.issuedCost)}</strong></div>}
                   <div className="muted small">Certified, paid, variations: coming next</div>
                 </>) : <div className="muted small">Money hidden for your role</div>}
               </div>
             </div>
 
             <div className="actions">
+              <Link className="btn secondary small" to={`/programme?project=${r.project.id}`}>Programme</Link>
               <Link className="btn secondary small" to={`/site-reports?project=${r.project.id}`}>Site reports</Link>
               {can("rfi.view") && <Link className="btn secondary small" to={`/rfis?project=${r.project.id}`}>RFIs</Link>}
               {can("submittal.view") && <Link className="btn secondary small" to={`/submittals?project=${r.project.id}`}>Submittals</Link>}
               <Link className="btn secondary small" to={`/drawings?project=${r.project.id}`}>Drawings</Link>
               <Link className="btn secondary small" to={`/report?project=${r.project.id}`}>Materials report</Link>
-              {can("progress.update") && <button className="btn secondary small" onClick={() => setUpdating(updating === r.project.id ? null : r.project.id)}>Update progress</button>}
-              {r.programme && <span className="muted small">Progress as at {fmtDate(r.programme.asOf)}{r.programme.stale ? " (out of date)" : ""}</span>}
+              {can("progress.update") && r.programme?.source !== "baseline" && <button className="btn secondary small" onClick={() => setUpdating(updating === r.project.id ? null : r.project.id)}>Update progress</button>}
+              {r.programme && <span className="muted small">{r.programme.source === "baseline" ? `From baseline "${r.programme.baselineName}", progress as at` : "Progress as at"} {fmtDate(r.programme.asOf)}{r.programme.stale ? " (out of date)" : ""}</span>}
             </div>
             {updating === r.project.id && <ProgressForm row={r} onDone={() => { setUpdating(null); reload(); }} />}
           </section>
