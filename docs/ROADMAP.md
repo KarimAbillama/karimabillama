@@ -29,12 +29,21 @@ project report, plus transfers, reservations, stock card, action dashboard, CSV 
 
 **Slice 3: RFIs and drawing register** ✅ built and tested (scenarios 7 and 9)
 
+**Slice 4: contract, BOQ and programme** ✅ built and tested (November 2026)
+
+- Contract register with bonds/guarantees/insurances and expiry warnings
+- Contract BOQ imported from Excel, confirmed and locked; quantities done to date measured on site; value of work done
+- Cost budget per cost code vs purchase commitments
+- Programme baseline from Primavera P6 (XER or Excel activity list); site progress per activity replaces the Excel
+  tracker; S-curve, days behind, forecast finish, look-aheads; owner overview uses it
+
 **Deployment on EDGE's Windows Server** ✅ installer, Windows service, HTTPS, nightly backups, restore test,
 CSV import of EDGE's own data, temporary passwords with forced change
 
 Next slices, in proposed order (reordered after EDGE's answers):
 
-0. **Money**: client payment applications and certificates, retention, variations (pending vs approved),
+0. **Variations and money**: site instructions and CVIs, variation requests and approved VOs (as BOQ changes),
+   monthly payment applications built from the measured BOQ quantities, certificates, retention, advance recovery,
    cash in vs cash out, cost vs budget per project. Then **subcontractor control**: packages, progress claims,
    certification, back-charges.
 

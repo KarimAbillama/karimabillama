@@ -47,7 +47,9 @@ function toast(text: string) {
 const PEOPLE: [string, string, string][] = [
   ["director@demo.edge.test", "Owner / Director", "all projects at a glance"],
   ["pm.marina@demo.edge.test", "Project manager", "progress, approvals, reviews daily reports"],
-  ["engineer.marina@demo.edge.test", "Site engineer", "daily report, material requests, deliveries"],
+  ["engineer.marina@demo.edge.test", "Site engineer", "progress, measured quantities, daily report, deliveries"],
+  ["planner@demo.edge.test", "Planning engineer", "imports the P6 baseline, keeps progress up to date"],
+  ["qs@demo.edge.test", "Quantity surveyor", "contract, BOQ, budget"],
   ["dc@demo.edge.test", "Document controller", "submittals, samples, mock-ups"],
   ["procurement@demo.edge.test", "Procurement", "orders what is missing"],
   ["stores@demo.edge.test", "Storekeeper", "reserves, issues, transfers"],

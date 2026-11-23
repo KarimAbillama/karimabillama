@@ -46,7 +46,7 @@ fill it in, and save it as "CSV UTF-8". "templates\example" shows the format.
   consultant_codes.csv  each consultant's approval codes, per project
 
 Roles you can use in users.csv (separate several with |):
-  director, operations_manager, project_manager, site_engineer, foreman,
+  director, operations_manager, project_manager, planning_engineer, site_engineer, foreman,
   document_controller, procurement_officer, storekeeper, quantity_surveyor,
   accountant, management_viewer, admin
 
@@ -60,6 +60,13 @@ New staff get a temporary password, saved in a file named
 templates\temporary-passwords-<date>.csv. Give each person theirs privately,
 then DELETE that file. Each person must choose their own password at first
 sign-in. Forgotten password:  .\edge.cmd reset-password person@yourcompany.ae
+
+
+Contract BOQs and P6 programmes are imported in the browser, not here:
+  Contract page -> "Import BOQ from Excel"; Programme & progress -> "Import baseline".
+  The folder "examples" shows the layouts: boq-example.csv, programme-example.csv
+  (an activity list exported from P6 to Excel) and progress-example.csv. A P6 .xer
+  export (File -> Export -> Primavera PM, one project) can be imported directly.
 
 
 4. ACCESS FROM SITES AND PHONES

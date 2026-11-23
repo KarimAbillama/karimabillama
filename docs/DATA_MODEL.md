@@ -107,15 +107,22 @@ balance). Both are polymorphic references, so they are indexed but have no forei
 | `submittal_items` | Materials a submittal covers; blocks PO approval until approved (A-29) | — |
 | `site_reports`, `site_report_manpower` | Daily report per site and day, with headcount by trade and company | unique (project, site, day); headcount > 0 |
 | `project_progress_updates` | Weekly planned vs actual %, forecast finish, risks | 0–100; **append-only** (trigger) |
+| `contracts` | Main contract per project: form, dates, value, retention (+ limit), advance, delay damages (+ cap), defects period, payment days, BOQ status | one per project; % 0–100; a confirmed BOQ cannot be reopened (trigger) |
+| `contract_securities` | Bonds, guarantees and insurance policies with expiry | released ⇔ release date |
+| `boq_lines` | Contract BOQ: headings, items (unit, qty, rate, amount), provisional sums; section and optional cost code | shape CHECK per kind; **frozen once the BOQ is confirmed** (trigger) |
+| `boq_measurements` | Quantity done to date per BOQ item, as measured on site | qty ≥ 0; **append-only** (trigger) |
+| `project_budgets` | Cost budget per project and cost code | amount ≥ 0 |
+| `programme_baselines` | Imported P6 / CSV baselines; one current per project, older ones kept | partial unique index on current |
+| `programme_activities` | Activities of a baseline: P6 activity ID, WBS, planned dates, duration, milestone, weight | unique ID per baseline; **append-only** (trigger) |
+| `activity_progress` | Site progress per activity ID: %, actual start/finish, remark | 0–100; finish ≥ start; **append-only** (trigger) |
 
 ## Planned (not yet created)
 
 Phase 2+ entities from brief §15 will be added with their modules, each with explicit foreign keys:
 
 - employee, attendance
-- activity, baseline, progress update
-- RFI, drawing revision, inspection request
+- inspection request
 - RFQ, quotation, supplier invoice
 - variation, subcontract, certificate
 - notification, action
-- opportunity, estimate, BOQ, budget
+- opportunity, estimate (tender BOQ)

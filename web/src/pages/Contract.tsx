@@ -161,10 +161,11 @@ function Securities({ securities, projectId, manage, onChange }: { securities: S
       setAdding(false); setV({ ...v, reference: "", issuer: "", amount: "", issueDate: "", expiryDate: "" }); onChange();
     } catch (e) { setErr(e as ApiError); }
   };
-  const release = async (s: Security) => {
-    const date = window.prompt(`Date ${s.reference} was released or returned (YYYY-MM-DD)`, todayDubai());
-    if (!date) return;
-    try { await post(`/api/contract-securities/${s.id}/release`, { releasedDate: date }); onChange(); } catch (e) { setErr(e as ApiError); }
+  const [releasing, setReleasing] = useState<{ id: string; date: string } | null>(null);
+  const release = async () => {
+    if (!releasing) return;
+    setErr(null);
+    try { await post(`/api/contract-securities/${releasing.id}/release`, { releasedDate: releasing.date }); setReleasing(null); onChange(); } catch (e) { setErr(e as ApiError); }
   };
   return (
     <Card title="Bonds, guarantees and insurances" actions={manage && !adding && <button className="btn secondary small" onClick={() => setAdding(true)}>Add</button>}>
@@ -176,7 +177,10 @@ function Securities({ securities, projectId, manage, onChange }: { securities: S
               <td>{KIND_LABEL[s.kind] ?? s.kind}</td><td>{s.reference}</td><td>{s.issuer ?? "—"}</td><td className="num">{fmtMoney(s.amount)}</td>
               <td>{fmtDate(s.expiryDate)}{s.state === "expiring" ? <div className="muted small">{s.daysLeft} days left</div> : null}</td>
               <td><span className={`badge ${STATE[s.state][1]}`}>{STATE[s.state][0]}</span>{s.releasedDate ? <div className="muted small">{fmtDate(s.releasedDate)}</div> : null}</td>
-              {manage && <td>{s.status === "active" && <button className="btn secondary small" onClick={() => release(s)}>Released</button>}</td>}
+              {manage && <td>{s.status === "active" && (releasing?.id === s.id ? (
+                <div className="actions"><input type="date" aria-label={`Date ${s.reference} was released`} value={releasing.date} max={todayDubai()} onChange={(e) => setReleasing({ id: s.id, date: e.target.value })} />
+                  <button className="btn primary small" onClick={release}>Save</button><button className="btn secondary small" onClick={() => setReleasing(null)}>Cancel</button></div>
+              ) : <button className="btn secondary small" title="Mark as released or returned" onClick={() => setReleasing({ id: s.id, date: todayDubai() })}>Released</button>)}</td>}
             </tr>
           ))}</tbody>
         </table></div>

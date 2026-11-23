@@ -1,0 +1,25 @@
+﻿Ref,Description,Unit,Quantity,Rate,Amount,Cost code
+B1,BILL 1 — PRELIMINARIES,,,,,
+1.01,"Site establishment, offices and welfare",LS,,,420000,
+1.02,Site management and supervision,month,12,110000,1320000,
+1.03,Insurances and bonds,LS,,,259500,
+B2,BILL 2 — PARTITIONS AND CEILINGS,,,,,
+2.01,"Blockwork partitions 100 mm, plastered both sides",m2,21000,68,1428000,04-220
+2.02,"Gypsum board partitions, double layer, insulated",m2,18500,115,2127500,09-210
+2.03,Gypsum board ceilings including access panels,m2,26000,85,2210000,09-210
+B3,BILL 3 — FLOOR AND WALL FINISHES,,,,,
+3.01,Porcelain floor tiles 600 x 600 mm,m2,22000,135,2970000,09-300
+3.02,Ceramic wall tiles to wet areas,m2,14500,110,1595000,09-300
+3.03,Porcelain skirting 100 mm,m,30000,28,840000,09-300
+B4,BILL 4 — PAINTING,,,,,
+4.01,"Emulsion paint to walls, three coats",m2,52000,18,936000,09-900
+4.02,Emulsion paint to ceilings,m2,26000,14,364000,09-900
+B5,BILL 5 — DOORS AND JOINERY,,,,,
+5.01,"Apartment entrance doors, 60-minute fire rated",nr,240,3400,816000,
+5.02,Internal flush doors with ironmongery,nr,960,1000,960000,
+B6,BILL 6 — MEP FIT-OUT,,,,,
+6.01,Small power and lighting final circuits,apartment,240,4200,1008000,26-050
+6.02,"Sanitary fixtures, supply and install",set,480,1450,696000,22-110
+PS,PROVISIONAL SUMS,,,,,
+PS1,Provisional sum: client-selected light fittings,PS,,,400000,
+PS2,Provisional sum: authority fees,PS,,,150000,

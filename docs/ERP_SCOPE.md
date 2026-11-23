@@ -1,6 +1,6 @@
 # ERP scope and build order
 
-As of 2026-11-23. The ERP covers a project from tender to final account in 13 modules. About a third is
+As of 2026-11-23 (updated after the contract, BOQ and programme slice). The ERP covers a project from tender to final account in 13 modules. About a third is
 built; the commercial chain (BOQ, variations, payments) is the main gap. Shared copy for EDGE and the
 engineering team: https://claude.ai/artifact/8yTAPepcC1QEyG2AwMoTkr (keep the two in step).
 
@@ -24,9 +24,9 @@ every project shows cost vs budget and expected profit at completion.
 | --- | --- | --- | --- | --- | --- |
 | 1 | Tenders and clients | Contacts, tender register, bid/no-bid, clarifications, estimating, won/lost reason | Company, contact, tender, estimate, priced BOQ | Not started | Companies as master data only |
 | 2 | Contracts | Value and dates, retention %, advance, liquidated damages, defects period, bonds and insurances with expiry, notice deadlines | Contract, contract BOQ, guarantee, insurance, key date | Not started | Contract value on the project |
-| 3 | Planning | Programme and milestones, 2- and 6-week look-aheads, long-lead items, budget by cost code | Activity, milestone, budget line | Partly built | Weekly planned vs actual %, forecast finish |
+| 3 | Planning | Programme and milestones, 2- and 6-week look-aheads, long-lead items, budget by cost code | Activity, milestone, budget line | Partly built | P6 baseline import (XER or Excel activity list); site progress per activity; S-curve, days behind, forecast finish; 2- and 6-week look-aheads; re-baselining keeps progress |
 | 4 | Consultant paperwork | Drawings, RFIs, submittals, samples, mock-ups, transmittals, letters, minutes and actions, site instructions, CVIs, authority approvals (status only) | Drawing revision, RFI, submittal, transmittal, letter, MoM action, SI, CVI | Partly built | Drawings, RFIs, submittals with per-consultant codes |
-| 5 | Site management | Daily reports, photos, labour attendance, plant, deliveries, weekly client report | Daily report, attendance, plant log | Partly built | Daily reports, owner overview |
+| 5 | Site management | Daily reports, photos, labour attendance, plant, deliveries, weekly client report | Daily report, attendance, plant log | Partly built | Daily reports, owner overview, quantities done to date per BOQ item |
 | 6 | Materials and procurement | Requests, approvals, POs, receipts, stock, transfers, issues, quotation comparison, invoice matching, returns | MR, PO, receipt, stock movement, invoice | Built | All except quotation comparison, invoice matching, returns |
 | 7 | Subcontractors and labour | Prequalification, licence/insurance expiry, packages and their BOQ, monthly claims, certification, retention, back-charges, manpower | Subcontract, claim, certificate, back-charge | Not started | Subcontractors as companies; manpower in daily reports |
 | 8 | Variations and claims | SI or CVI to variation request to quotation to approved VO; extension of time claims from recorded delays | Instruction, variation, VO, EOT claim | Not started | RFIs flag possible variations |

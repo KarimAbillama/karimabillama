@@ -1,0 +1,21 @@
+﻿Activity ID,Activity Name,WBS Code,Start,Finish,Activity Type
+M000,Start of fit-out works,,01/09/2026,01/09/2026,Start Milestone
+A1010,Mobilisation and site set-up,PRE,01/09/2026,15/09/2026,Task Dependent
+A1100,Blockwork and partitions L1–10,PART,11/09/2026,31/10/2026,Task Dependent
+A1110,Blockwork and partitions L11–20,PART,11/10/2026,30/11/2026,Task Dependent
+A1120,Blockwork and partitions L21–30,PART,10/11/2026,30/12/2026,Task Dependent
+A1200,MEP first fix L1–10,MEP,01/10/2026,20/11/2026,Task Dependent
+A1210,MEP first fix L11–20,MEP,31/10/2026,20/12/2026,Task Dependent
+A1220,MEP first fix L21–30,MEP,30/11/2026,19/01/2027,Task Dependent
+A1300,Gypsum ceilings L1–10,CEIL,15/11/2026,25/12/2026,Task Dependent
+A1310,Gypsum ceilings L11–20,CEIL,15/12/2026,24/01/2027,Task Dependent
+A1320,Gypsum ceilings L21–30,CEIL,14/01/2027,23/02/2027,Task Dependent
+A1400,Floor and wall tiling L1–10,FIN,30/11/2026,19/01/2027,Task Dependent
+A1410,Floor and wall tiling L11–20,FIN,09/01/2027,28/02/2027,Task Dependent
+A1420,Floor and wall tiling L21–30,FIN,08/02/2027,30/03/2027,Task Dependent
+A1500,Painting L1–30,FIN,29/01/2027,29/05/2027,Task Dependent
+A1600,Doors and joinery L1–30,JOIN,28/02/2027,18/06/2027,Task Dependent
+A1700,MEP second fix and sanitary fixtures,MEP,20/03/2027,28/06/2027,Task Dependent
+A1800,Testing and commissioning,T&C,18/06/2027,02/08/2027,Task Dependent
+A1900,Snagging and handover,HO,13/07/2027,06/08/2027,Task Dependent
+M999,Practical completion (20 days float to contract completion),,07/08/2027,07/08/2027,Finish Milestone

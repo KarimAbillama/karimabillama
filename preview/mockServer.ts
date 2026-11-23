@@ -9,6 +9,12 @@
 import Decimal from "decimal.js";
 import { ROLE_TEMPLATES } from "../server/auth/roles";
 import { VAT_CODES, VAT_VERIFIED } from "../server/lib/vat";
+import { parseBoqCsv, type BoqKind } from "../server/lib/boqParse";
+import { parseProgrammeCsv, parseProgressCsv, parseXer, type ImportedActivity, type ProgressRow } from "../server/lib/p6";
+import {
+  activityStatus, actualProjectPct, latestProgress, plannedProjectPct, programmeDates, progressProblem, sCurve, scheduleVarianceDays, type ProgressPoint,
+} from "../server/lib/programme";
+import { DEMO_CONTRACTS, DEMO_PROGRAMMES, baselineCsv, progressSnapshots, toCsv as demoCsv } from "../server/db/demoContractData";
 
 // ───────────── helpers ─────────────
 type Num = number;
@@ -800,14 +806,24 @@ function overview(a: Actor) {
     const attention: string[] = [];
     const pu = db.progress.filter((u) => u.projectId === p.id).sort((x, y) => y.asOfDate.localeCompare(x.asOfDate) || y.createdAt.localeCompare(x.createdAt))[0];
     let programme = null; let progRag: Rag = "none";
-    if (pu) {
+    const ps = programmeSnapM(p.id);
+    if (ps) {
+      const variance = D(ps.actualPct).minus(ps.plannedPct), stale = !ps.lastUpdate || daysBetween(ps.lastUpdate, t) > 14, lateFinish = ps.forecastFinish > p.plannedEndDate;
+      progRag = variance.lte(-10) || lateFinish ? "red" : variance.lte(-3) || stale ? "amber" : "green";
+      programme = { source: "baseline", baselineName: ps.baselineName, asOf: ps.lastUpdate ?? ps.plannedFinish, plannedPct: m2(ps.plannedPct), actualPct: m2(ps.actualPct), variancePct: m2(variance),
+        daysAheadBehind: ps.daysAheadBehind, lateActivities: ps.lateActivities, forecastEndDate: ps.forecastFinish, plannedEndDate: p.plannedEndDate, lateFinish, stale, summary: pu?.summary ?? null, risks: pu?.risks ?? null, rag: progRag };
+      if (variance.lt(0)) attention.push(`Programme: ${variance.abs().toDecimalPlaces(1).toString()} points behind plan${ps.daysAheadBehind !== null && ps.daysAheadBehind < 0 ? ` (about ${-ps.daysAheadBehind} days)` : ""}`);
+      if (lateFinish) attention.push(`Forecast finish ${ps.forecastFinish}, after the contract completion ${p.plannedEndDate}`);
+      if (ps.lateActivities) attention.push(`${ps.lateActivities} activit${ps.lateActivities > 1 ? "ies" : "y"} late to start or finish`);
+      if (stale) attention.push(ps.lastUpdate ? `Activity progress not updated since ${ps.lastUpdate}` : "No activity progress recorded against the baseline yet");
+    } else if (pu) {
       const variance = minus(pu.actualPct, pu.plannedPct), stale = daysBetween(pu.asOfDate, t) > 14, lateFinish = !!pu.forecastEndDate && pu.forecastEndDate > p.plannedEndDate;
       progRag = variance <= -10 || lateFinish ? "red" : variance <= -3 || stale ? "amber" : "green";
-      programme = { asOf: pu.asOfDate, plannedPct: m2(pu.plannedPct), actualPct: m2(pu.actualPct), variancePct: m2(variance), forecastEndDate: pu.forecastEndDate, plannedEndDate: p.plannedEndDate, lateFinish, stale, summary: pu.summary, risks: pu.risks, rag: progRag };
+      programme = { source: "manual", baselineName: null, daysAheadBehind: null, lateActivities: 0, asOf: pu.asOfDate, plannedPct: m2(pu.plannedPct), actualPct: m2(pu.actualPct), variancePct: m2(variance), forecastEndDate: pu.forecastEndDate, plannedEndDate: p.plannedEndDate, lateFinish, stale, summary: pu.summary, risks: pu.risks, rag: progRag };
       if (variance < 0) attention.push(`Programme: ${pu.actualPct}% done vs ${pu.plannedPct}% planned`);
       if (lateFinish) attention.push(`Forecast finish ${pu.forecastEndDate}, after the planned ${p.plannedEndDate}`);
       if (stale) attention.push(`Progress not updated since ${pu.asOfDate}`);
-    } else attention.push("No progress update recorded yet");
+    } else attention.push("No programme baseline or progress update yet");
     let approvals = null; let apprRag: Rag = "none";
     if (can(a, "submittal.view")) {
       const mine = db.submittals.filter((s) => s.projectId === p.id && s.status !== "cancelled").map((s) => ({ s, st: subState(s, t) }));
@@ -847,7 +863,14 @@ function overview(a: Actor) {
     const supplyRag: Rag = worstLate > 7 ? "red" : latePos.length || uncoveredSoon ? "amber" : "green";
     if (latePos.length) attention.push(`${latePos.length} late deliveries (worst ${worstLate} days)`);
     if (uncoveredSoon) attention.push(`${uncoveredSoon} material request line(s) needed within 3 days and not covered`);
-    const money = can(a, "cost.view") ? { contractValue: m2(p.contractValue), committed: m2(sum(drillRows(p.id, "committed").map((r) => r.value))), issuedCost: m2(sum(drillRows(p.id, "issued").map((r) => r.value))), notTracked: ["certified", "paid", "variations", "retention"] } : null;
+    const showCost = can(a, "cost.view"), showContract = can(a, "contract.view");
+    const cs = showContract ? contractSnapM(p.id) : null;
+    const money = showCost || showContract ? {
+      contractValue: cs?.contractValue ?? m2(p.contractValue), committed: showCost ? m2(sum(drillRows(p.id, "committed").map((r) => r.value))) : null,
+      issuedCost: showCost ? m2(sum(drillRows(p.id, "issued").map((r) => r.value))) : null, workDone: cs?.boqStatus === "confirmed" ? cs.workDone : null,
+      workDonePct: cs?.boqStatus === "confirmed" ? cs.workDonePct : null, boqStatus: cs?.boqStatus ?? null, notTracked: ["certified", "paid", "variations", "retention"] } : null;
+    if (cs?.expired) attention.push(`${cs.expired} guarantee/insurance expired`);
+    if (cs?.expiring) attention.push(`${cs.expiring} guarantee/insurance expiring within 30 days`);
     return { project: { id: p.id, code: p.code, name: p.name, status: p.status, clientName: p.clientName, startDate: p.startDate, plannedEndDate: p.plannedEndDate },
       overall: worstRag(progRag, apprRag, rfiRag, siteRag, safetyRag, supplyRag), programme, approvals, rfis,
       site: { lastReportDate: lastDate, missingWorkdays: missing, headcount, delayDays: delays.length, delayCauses: causes, rag: siteRag },
@@ -1251,6 +1274,323 @@ route("POST", "/api/drawings/:id/revisions", (a, p, _q, b) => addRev(a, p.id, b)
 export const DEMO_PASSWORD = "Demo@2026!";
 
 /** Answers one API call the way the real server would (status code + JSON body). */
+// ───────────── contract, BOQ, budget and programme (same calculations as the server) ─────────────
+interface MContract {
+  id: string; projectId: string; contractNo: string; title: string | null; form: string | null; signedDate: string | null; commencementDate: string | null; completionDate: string | null;
+  contractValue: string; retentionPct: string; retentionLimitPct: string | null; advancePct: string; ldPerDay: string | null; ldCapPct: string | null; defectsLiabilityMonths: number | null;
+  paymentTermsDays: number | null; notes: string | null; boqStatus: "none" | "draft" | "confirmed"; boqSourceName: string | null; boqConfirmedAt: string | null; boqConfirmedBy: string | null;
+  boqConfirmNote: string | null; version: number;
+}
+interface MSecurity { id: string; contractId: string; kind: string; reference: string; issuer: string | null; amount: string | null; issueDate: string | null; expiryDate: string; status: "active" | "released"; releasedDate: string | null; notes: string | null }
+interface MLine { id: string; contractId: string; lineNo: number; kind: BoqKind; ref: string | null; description: string; unit: string | null; qty: string | null; rate: string | null; amount: string | null; costCodeId: string | null; section: string | null }
+interface MMeasure { lineId: string; asOfDate: string; qtyToDate: string; remark: string | null; recordedBy: string; recordedAt: string }
+interface MBaseline { id: string; projectId: string; name: string; source: "p6_xer" | "csv"; fileName: string | null; p6ProjectCode: string | null; dataDate: string | null; plannedStart: string; plannedFinish: string; activityCount: number; isCurrent: boolean; importedBy: string; importedAt: string }
+interface MActivity extends ImportedActivity { id: string; baselineId: string; sortOrder: number }
+interface MProgress { projectId: string; activityCode: string; asOfDate: string; pctComplete: string; actualStart: string | null; actualFinish: string | null; remark: string | null; recordedBy: string; recordedAt: string }
+const cx = { contracts: [] as MContract[], securities: [] as MSecurity[], lines: [] as MLine[], measures: [] as MMeasure[], budgets: [] as { projectId: string; costCodeId: string; amount: string; note: string | null }[],
+  baselines: [] as MBaseline[], activities: [] as MActivity[], progress: [] as MProgress[] };
+let recSeq = 0;
+const recAt = () => `${nowIso()}#${String(++recSeq).padStart(6, "0")}`;
+
+const contractOf = (projectId: string) => cx.contracts.find((c) => c.projectId === projectId) ?? null;
+const securityStateM = (s: MSecurity) => {
+  if (s.status === "released") return { state: "released", daysLeft: null };
+  const left = daysBetween(today(), s.expiryDate);
+  return { state: left < 0 ? "expired" : left <= 30 ? "expiring" : "valid", daysLeft: left };
+};
+const latestMeasure = (lineId: string) => cx.measures.filter((m) => m.lineId === lineId).sort((x, y) => x.asOfDate.localeCompare(y.asOfDate) || x.recordedAt.localeCompare(y.recordedAt)).at(-1);
+function boqSummaryM(c: MContract) {
+  const lines = cx.lines.filter((l) => l.contractId === c.id);
+  const priced = lines.filter((l) => l.kind !== "heading");
+  const total = priced.reduce((s, l) => s.plus(l.amount!), D(0));
+  const doneOf = (l: MLine) => (l.kind === "item" ? D(latestMeasure(l.id)?.qtyToDate ?? 0).times(l.rate!).toDecimalPlaces(2) : D(0));
+  const done = priced.reduce((s, l) => s.plus(doneOf(l)), D(0));
+  const sections = new Map<string, { section: string; amount: Decimal; done: Decimal }>();
+  for (const l of priced) {
+    const k = l.section ?? "(no heading)";
+    const x = sections.get(k) ?? { section: k, amount: D(0), done: D(0) };
+    x.amount = x.amount.plus(l.amount!); x.done = x.done.plus(doneOf(l));
+    sections.set(k, x);
+  }
+  return {
+    status: c.boqStatus, sourceName: c.boqSourceName, lines: lines.length, items: priced.filter((l) => l.kind === "item").length,
+    provisionalSums: m2(priced.filter((l) => l.kind === "provisional_sum").reduce((s, l) => s.plus(l.amount!), D(0))), total: m2(total), difference: m2(total.minus(c.contractValue)),
+    workDone: m2(done), workDonePct: total.isZero() ? "0.0" : done.div(total).times(100).toFixed(1),
+    sections: [...sections.values()].map((x) => ({ section: x.section, amount: m2(x.amount), done: m2(x.done) })), confirmedAt: c.boqConfirmedAt, confirmNote: c.boqConfirmNote,
+  };
+}
+function addMonthsM(iso: string, months: number) {
+  const d = new Date(`${iso}T00:00:00Z`); const day = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + months);
+  d.setUTCDate(Math.min(day, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate())); return d.toISOString().slice(0, 10);
+}
+route("GET", "/api/projects/:projectId/contract", (a, p) => {
+  need(a, "contract.view"); needProject(a, p.projectId, "Project");
+  const pr = project(p.projectId); const c = contractOf(p.projectId);
+  if (!c) return { project: { id: pr.id, code: pr.code, name: pr.name }, contract: null, securities: [], boq: null };
+  return {
+    project: { id: pr.id, code: pr.code, name: pr.name },
+    contract: { ...c, boqConfirmedByName: userName(c.boqConfirmedBy), durationDays: c.commencementDate && c.completionDate ? daysBetween(c.commencementDate, c.completionDate) + 1 : null,
+      dlpEndDate: c.completionDate && c.defectsLiabilityMonths ? addMonthsM(c.completionDate, c.defectsLiabilityMonths) : null },
+    securities: cx.securities.filter((s) => s.contractId === c.id).sort((x, y) => x.expiryDate.localeCompare(y.expiryDate)).map((s) => ({ ...s, ...securityStateM(s) })),
+    boq: boqSummaryM(c),
+  };
+});
+function saveContractM(a: Actor, projectId: string, b: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  need(a, "contract.manage"); needProject(a, projectId, "Project");
+  if (!String(b.contractNo ?? "").trim()) throw rule("REQUIRED", "Enter the contract number.");
+  for (const [k, l] of [["retentionPct", "Retention %"], ["advancePct", "Advance payment %"], ["retentionLimitPct", "Retention limit %"], ["ldCapPct", "LD cap %"]]) {
+    if (b[k] !== null && b[k] !== undefined && b[k] !== "" && (Number(b[k]) < 0 || Number(b[k]) > 100)) throw rule("INVALID_PCT", `${l} must be between 0 and 100.`);
+  }
+  if (b.commencementDate && b.completionDate && b.completionDate < b.commencementDate) throw rule("INVALID_DATES", "The completion date is before the commencement date.");
+  const pct = (v: unknown) => (v === null || v === undefined || v === "" ? null : D(String(v)).toFixed(2));
+  const values = { contractNo: String(b.contractNo).trim(), title: b.title ?? null, form: b.form ?? null, signedDate: b.signedDate ?? null, commencementDate: b.commencementDate ?? null,
+    completionDate: b.completionDate ?? null, contractValue: m2(String(b.contractValue)), retentionPct: pct(b.retentionPct) ?? "0.00", retentionLimitPct: pct(b.retentionLimitPct),
+    advancePct: pct(b.advancePct) ?? "0.00", ldPerDay: b.ldPerDay ? m2(String(b.ldPerDay)) : null, ldCapPct: pct(b.ldCapPct), defectsLiabilityMonths: b.defectsLiabilityMonths ?? null,
+    paymentTermsDays: b.paymentTermsDays ?? null, notes: b.notes ?? null };
+  let c = contractOf(projectId);
+  if (!c) {
+    c = { id: newId("ct"), projectId, ...values, boqStatus: "none", boqSourceName: null, boqConfirmedAt: null, boqConfirmedBy: null, boqConfirmNote: null, version: 1 };
+    cx.contracts.push(c); audit(a, "contract.created", "contract", c.id, projectId, { contractNo: c.contractNo });
+  } else {
+    if (b.version !== undefined && b.version !== c.version) throw conflict();
+    Object.assign(c, values, { version: c.version + 1 }); audit(a, "contract.updated", "contract", c.id, projectId, null);
+  }
+  const pr = project(projectId);
+  pr.contractValue = Number(c.contractValue);
+  if (c.completionDate) pr.plannedEndDate = c.completionDate;
+  if (c.commencementDate) pr.startDate = c.commencementDate;
+  return c;
+}
+route("PUT", "/api/projects/:projectId/contract", (a, p, _q, b) => saveContractM(a, p.projectId, b));
+function addSecurityM(a: Actor, projectId: string, b: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  need(a, "contract.manage"); needProject(a, projectId, "Project");
+  const c = contractOf(projectId); if (!c) throw rule("NO_CONTRACT", "Record the contract first.");
+  if (!String(b.reference ?? "").trim()) throw rule("REQUIRED", "Enter the guarantee or policy number.");
+  if (b.issueDate && b.expiryDate < b.issueDate) throw rule("INVALID_DATES", "The expiry date is before the issue date.");
+  const s: MSecurity = { id: newId("sec"), contractId: c.id, kind: b.kind, reference: String(b.reference).trim(), issuer: b.issuer ?? null, amount: b.amount ? m2(String(b.amount)) : null,
+    issueDate: b.issueDate ?? null, expiryDate: b.expiryDate, status: "active", releasedDate: null, notes: b.notes ?? null };
+  cx.securities.push(s); audit(a, "contract.security_added", "contract", c.id, projectId, { reference: s.reference });
+  return s;
+}
+route("POST", "/api/projects/:projectId/contract/securities", (a, p, _q, b) => addSecurityM(a, p.projectId, b));
+route("POST", "/api/contract-securities/:id/release", (a, p, _q, b) => {
+  need(a, "contract.manage");
+  const s = byId(cx.securities, p.id, "Guarantee or policy");
+  const c = cx.contracts.find((x) => x.id === s.contractId)!;
+  needProject(a, c.projectId, "Guarantee or policy");
+  if (s.status === "released") throw rule("ALREADY_RELEASED", "This was already released.");
+  if (b.releasedDate > today()) throw rule("FUTURE_DATE", "The release date cannot be in the future.");
+  Object.assign(s, { status: "released", releasedDate: b.releasedDate });
+  return { ok: true };
+});
+function importBoqM(a: Actor, projectId: string, b: { csv: string; fileName?: string | null; dryRun?: boolean }) {
+  need(a, "contract.manage"); needProject(a, projectId, "Project");
+  const c = contractOf(projectId); if (!c) throw rule("NO_CONTRACT", "Record the contract first, then import its BOQ.");
+  if (c.boqStatus === "confirmed") throw rule("BOQ_CONFIRMED", "The contract BOQ is already confirmed. Changes now go through variations.");
+  const parsed = parseBoqCsv(b.csv);
+  const problems = [...parsed.problems];
+  for (const l of parsed.lines) if (l.costCode && !db.costCodes.some((x) => x.code === l.costCode)) problems.push(`Line ${l.lineNo}${l.ref ? ` (${l.ref})` : ""}: cost code "${l.costCode}" does not exist.`);
+  const summary = { lines: parsed.lines.length, items: parsed.lines.filter((l) => l.kind === "item").length, headings: parsed.lines.filter((l) => l.kind === "heading").length,
+    provisionalSums: parsed.lines.filter((l) => l.kind === "provisional_sum").length, total: parsed.total, contractValue: c.contractValue, difference: m2(D(parsed.total).minus(c.contractValue)) };
+  if (problems.length) return { ok: false, saved: false, problems, ...summary };
+  if (b.dryRun) return { ok: true, saved: false, problems, ...summary };
+  cx.lines = cx.lines.filter((l) => l.contractId !== c.id);
+  for (const l of parsed.lines) cx.lines.push({ id: newId("boq"), contractId: c.id, lineNo: l.lineNo, kind: l.kind, ref: l.ref, description: l.description, unit: l.unit, qty: l.qty, rate: l.rate, amount: l.amount,
+    costCodeId: l.costCode ? db.costCodes.find((x) => x.code === l.costCode)!.id : null, section: l.section });
+  Object.assign(c, { boqStatus: "draft", boqSourceName: b.fileName ?? null, version: c.version + 1 });
+  audit(a, "boq.imported", "contract", c.id, projectId, { lines: summary.lines });
+  return { ok: true, saved: true, problems, ...summary };
+}
+route("POST", "/api/projects/:projectId/boq/import", (a, p, _q, b) => importBoqM(a, p.projectId, b));
+function confirmBoqM(a: Actor, projectId: string, note: string | null) {
+  need(a, "contract.manage"); needProject(a, projectId, "Project");
+  const c = contractOf(projectId);
+  if (!c || c.boqStatus === "none") throw rule("NO_BOQ", "Import the BOQ first.");
+  if (c.boqStatus === "confirmed") throw rule("BOQ_CONFIRMED", "The BOQ is already confirmed.");
+  const s = boqSummaryM(c);
+  if (!D(s.difference).isZero() && !note?.trim()) throw rule("BOQ_TOTAL_MISMATCH", `The BOQ total (AED ${s.total}) differs from the contract value (AED ${c.contractValue}) by AED ${s.difference}. Explain the difference to confirm.`);
+  Object.assign(c, { boqStatus: "confirmed", boqConfirmedAt: nowIso(), boqConfirmedBy: a.user.id, boqConfirmNote: note?.trim() || null, version: c.version + 1 });
+  audit(a, "boq.confirmed", "contract", c.id, projectId, { total: s.total });
+  return { ok: true };
+}
+route("POST", "/api/projects/:projectId/boq/confirm", (a, p, _q, b) => confirmBoqM(a, p.projectId, b?.note ?? null));
+route("GET", "/api/projects/:projectId/boq", (a, p) => {
+  need(a, "project.view"); needProject(a, p.projectId, "Project");
+  const c = contractOf(p.projectId); const showRates = can(a, "contract.view");
+  if (!c) return { status: "none", contractNo: null, showRates, lines: [], summary: null };
+  const lines = cx.lines.filter((l) => l.contractId === c.id).sort((x, y) => x.lineNo - y.lineNo).map((l) => {
+    const m = latestMeasure(l.id);
+    const qtyToDate = l.kind === "item" ? m?.qtyToDate ?? "0.0000" : null;
+    const pct = l.kind === "item" ? D(qtyToDate!).div(l.qty!).times(100) : null;
+    return { id: l.id, lineNo: l.lineNo, kind: l.kind, ref: l.ref, description: l.description, unit: l.unit, qty: l.qty, section: l.section, costCode: l.costCodeId ? cc(l.costCodeId).code : null,
+      rate: showRates ? l.rate : null, amount: showRates ? l.amount : null, qtyToDate, pctDone: pct ? pct.toFixed(1) : null, overMeasured: pct ? pct.gt(100) : false,
+      valueDone: showRates && l.kind === "item" ? m2(D(qtyToDate!).times(l.rate!)) : null, lastMeasured: m ? { asOfDate: m.asOfDate, remark: m.remark } : null };
+  });
+  return { status: c.boqStatus, contractNo: c.contractNo, showRates, lines, summary: showRates ? boqSummaryM(c) : null };
+});
+function measureM(a: Actor, projectId: string, b: { asOfDate: string; rows: { boqLineId: string; qtyToDate: string; remark?: string | null }[] }) {
+  need(a, "site.progress"); needProject(a, projectId, "Project");
+  const c = contractOf(projectId);
+  if (!c || c.boqStatus !== "confirmed") throw rule("BOQ_NOT_CONFIRMED", "Quantities can be measured once the contract BOQ is confirmed.");
+  if (b.asOfDate > today()) throw rule("FUTURE_DATE", "Measurements cannot be dated in the future.");
+  const problems: string[] = [], warnings: string[] = [], save: MMeasure[] = [];
+  for (const r of b.rows) {
+    const l = cx.lines.find((x) => x.id === r.boqLineId && x.contractId === c.id);
+    if (!l) { problems.push("A line does not belong to this project's BOQ."); continue; }
+    const name = l.ref ?? `line ${l.lineNo}`;
+    if (l.kind !== "item") { problems.push(`${name}: only measured items take a quantity.`); continue; }
+    const q = D(r.qtyToDate), prev = latestMeasure(l.id);
+    if (q.lt(0)) { problems.push(`${name}: the quantity cannot be negative.`); continue; }
+    if (prev && q.eq(prev.qtyToDate)) continue;
+    if (prev && b.asOfDate < prev.asOfDate) { problems.push(`${name}: a measurement dated ${prev.asOfDate} already exists; use that date or later.`); continue; }
+    if (prev && q.lt(prev.qtyToDate) && !r.remark?.trim()) { problems.push(`${name}: the quantity is lower than last time (${D(prev.qtyToDate).toString()}). Add a remark explaining the correction.`); continue; }
+    if (q.gt(l.qty!)) warnings.push(`${name}: ${q.toString()} ${l.unit} is more than the BOQ quantity (${D(l.qty!).toString()}). Extra quantity may need a variation or remeasurement.`);
+    save.push({ lineId: l.id, asOfDate: b.asOfDate, qtyToDate: q4(q), remark: r.remark?.trim() || null, recordedBy: a.user.id, recordedAt: recAt() });
+  }
+  if (problems.length) return { ok: false, saved: 0, problems, warnings };
+  cx.measures.push(...save);
+  if (save.length) audit(a, "boq.measured", "contract", c.id, projectId, { lines: save.length });
+  return { ok: true, saved: save.length, problems, warnings };
+}
+route("POST", "/api/projects/:projectId/boq/measurements", (a, p, _q, b) => measureM(a, p.projectId, b));
+route("GET", "/api/boq-lines/:id/measurements", (a, p) => {
+  need(a, "project.view");
+  const l = byId(cx.lines, p.id, "BOQ line"); needProject(a, cx.contracts.find((c) => c.id === l.contractId)!.projectId, "BOQ line");
+  return cx.measures.filter((m) => m.lineId === l.id).sort((x, y) => y.asOfDate.localeCompare(x.asOfDate) || y.recordedAt.localeCompare(x.recordedAt))
+    .map((m) => ({ asOfDate: m.asOfDate, qtyToDate: m.qtyToDate, remark: m.remark, byName: userName(m.recordedBy), recordedAt: m.recordedAt.split("#")[0] }));
+});
+function budgetM(a: Actor, projectId: string) {
+  need(a, "cost.view"); needProject(a, projectId, "Project");
+  const committed = drillRows(projectId, "committed");
+  const rows = db.costCodes.map((code) => {
+    const b = cx.budgets.find((x) => x.projectId === projectId && x.costCodeId === code.id);
+    const com = committed.filter((r) => r.costCodeId === code.id).reduce((s, r) => s.plus(r.value), D(0));
+    if (!b && com.isZero()) return null;
+    const budget = D(b?.amount ?? 0);
+    return { costCodeId: code.id, costCode: code.code, name: code.name, category: code.category, budget: b ? m2(budget) : null, note: b?.note ?? null, committed: m2(com),
+      remaining: b ? m2(budget.minus(com)) : null, usedPct: b && !budget.isZero() ? com.div(budget).times(100).toFixed(1) : null, overBudget: !!b && com.gt(budget), noBudget: !b && com.gt(0) };
+  }).filter((r) => r !== null);
+  const tb = rows.reduce((s, r) => s.plus(r.budget ?? 0), D(0)), tc = rows.reduce((s, r) => s.plus(r.committed), D(0));
+  return { rows, totalBudget: m2(tb), totalCommitted: m2(tc), remaining: m2(tb.minus(tc)) };
+}
+route("GET", "/api/projects/:projectId/budget", (a, p) => budgetM(a, p.projectId));
+function setBudgetM(a: Actor, projectId: string, rows: { costCodeId: string; amount: string; note?: string | null }[]) {
+  need(a, "contract.manage", "cost.view"); needProject(a, projectId, "Project");
+  for (const r of rows) {
+    if (D(r.amount).lt(0)) throw rule("INVALID_VALUE", "Budget amounts cannot be negative.");
+    const ex = cx.budgets.find((x) => x.projectId === projectId && x.costCodeId === r.costCodeId);
+    if (ex) Object.assign(ex, { amount: m2(r.amount), note: r.note ?? null }); else cx.budgets.push({ projectId, costCodeId: r.costCodeId, amount: m2(r.amount), note: r.note ?? null });
+  }
+  return budgetM(a, projectId);
+}
+route("PUT", "/api/projects/:projectId/budget", (a, p, _q, b) => setBudgetM(a, p.projectId, b.rows));
+
+const currentBaselineM = (projectId: string) => cx.baselines.find((b) => b.projectId === projectId && b.isCurrent) ?? null;
+const pointsOf = (projectId: string): (ProgressPoint & MProgress)[] => cx.progress.filter((x) => x.projectId === projectId);
+function importBaselineM(a: Actor, projectId: string, b: { format: "xer" | "csv"; text: string; fileName?: string | null; name: string; notes?: string | null; dryRun?: boolean }) {
+  need(a, "programme.manage"); needProject(a, projectId, "Project");
+  if (!b.name?.trim()) throw rule("REQUIRED", "Name the baseline.");
+  const parsed = b.format === "xer" ? parseXer(b.text) : parseProgrammeCsv(b.text);
+  const acts = parsed.activities;
+  const { start, finish } = programmeDates(acts);
+  const summary = { activities: acts.length, milestones: acts.filter((x) => x.isMilestone).length, skipped: parsed.skipped, plannedStart: start, plannedFinish: finish, p6ProjectCode: parsed.projectCode, dataDate: parsed.dataDate };
+  if (parsed.problems.length) return { ok: false, saved: false, problems: parsed.problems, warnings: [], ...summary };
+  const codes = new Set(acts.map((x) => x.code));
+  const orphaned = [...new Set(pointsOf(projectId).map((x) => x.activityCode))].filter((c) => !codes.has(c));
+  const warnings = orphaned.length ? [`${orphaned.length} activity ID(s) with recorded progress are not in this file (${orphaned.slice(0, 5).join(", ")}). Their progress is kept but will not count.`] : [];
+  if (b.dryRun) return { ok: true, saved: false, problems: [], warnings, ...summary };
+  for (const x of cx.baselines) if (x.projectId === projectId) x.isCurrent = false;
+  const bl: MBaseline = { id: newId("bl"), projectId, name: b.name.trim(), source: b.format === "xer" ? "p6_xer" : "csv", fileName: b.fileName ?? null, p6ProjectCode: parsed.projectCode, dataDate: parsed.dataDate,
+    plannedStart: start!, plannedFinish: finish!, activityCount: acts.length, isCurrent: true, importedBy: a.user.id, importedAt: nowIso() };
+  cx.baselines.push(bl);
+  acts.forEach((x, i) => cx.activities.push({ ...x, id: newId("act"), baselineId: bl.id, sortOrder: i + 1 }));
+  audit(a, "programme.baseline_imported", "project", projectId, projectId, { name: bl.name, activities: acts.length });
+  return { ok: true, saved: true, baselineId: bl.id, problems: [], warnings, ...summary };
+}
+route("POST", "/api/projects/:projectId/programme/baselines", (a, p, _q, b) => importBaselineM(a, p.projectId, b));
+function programmeM(a: Actor, projectId: string) {
+  need(a, "project.view"); needProject(a, projectId, "Project");
+  const pr = project(projectId), t = today();
+  const history = cx.baselines.filter((b) => b.projectId === projectId).slice().reverse().map((b) => ({ ...b, importedByName: userName(b.importedBy) }));
+  const current = history.find((b) => b.isCurrent) ?? null;
+  const proj = { id: pr.id, code: pr.code, name: pr.name, plannedEndDate: pr.plannedEndDate };
+  const rules = { lookAheadShortDays: 14, lookAheadLongDays: 42, behindThresholdPct: 10 };
+  if (!current) return { project: proj, today: t, baseline: null, baselines: history, summary: null, curve: [], activities: [], rules };
+  const acts = cx.activities.filter((x) => x.baselineId === current.id).sort((x, y) => x.sortOrder - y.sortOrder);
+  const points = pointsOf(projectId);
+  const latest = latestProgress(points) as Map<string, ProgressPoint & MProgress>;
+  const planned = plannedProjectPct(acts, t), actual = actualProjectPct(acts, latest), sv = scheduleVarianceDays(acts, actual, t);
+  const rows = acts.map((x) => {
+    const lp = latest.get(x.code);
+    const st = activityStatus(x, lp, t, rules.behindThresholdPct);
+    return { ...x, ...st, actualStart: lp?.actualStart ?? null, actualFinish: lp?.actualFinish ?? null, remark: lp?.remark ?? null, lastUpdate: lp ? { asOfDate: lp.asOfDate, byName: userName(lp.recordedBy) } : null,
+      inShortLookAhead: st.state !== "done" && x.plannedStart <= addDays(t, rules.lookAheadShortDays), inLongLookAhead: st.state !== "done" && x.plannedStart <= addDays(t, rules.lookAheadLongDays) };
+  });
+  return {
+    project: proj, today: t, baseline: { ...current, importedByName: userName(current.importedBy) }, baselines: history, rules,
+    summary: { plannedPct: planned.toDecimalPlaces(1).toNumber(), actualPct: actual.toDecimalPlaces(1).toNumber(), variancePct: actual.minus(planned).toDecimalPlaces(1).toNumber(), daysAheadBehind: sv,
+      forecastFinish: sv !== null && sv < 0 ? addDays(current.plannedFinish, -sv) : current.plannedFinish, lastUpdate: points.reduce<string | null>((m, x) => (!m || x.asOfDate > m ? x.asOfDate : m), null),
+      counts: { total: rows.length, done: rows.filter((r) => r.state === "done").length, inProgress: rows.filter((r) => r.state === "in_progress").length, notStarted: rows.filter((r) => r.state === "not_started").length,
+        lateStart: rows.filter((r) => r.lateStart).length, lateFinish: rows.filter((r) => r.lateFinish).length, behind: rows.filter((r) => r.behind).length } },
+    curve: sCurve(acts, points, t), activities: rows,
+  };
+}
+route("GET", "/api/projects/:projectId/programme", (a, p) => programmeM(a, p.projectId));
+function recordProgressM(a: Actor, projectId: string, b: { asOfDate: string; rows: ProgressRow[] }) {
+  need(a, "site.progress"); needProject(a, projectId, "Project");
+  if (b.asOfDate > today()) throw rule("FUTURE_DATE", "Progress cannot be dated in the future.");
+  const bl = currentBaselineM(projectId); if (!bl) throw rule("NO_BASELINE", "Import the programme baseline first.");
+  const acts = cx.activities.filter((x) => x.baselineId === bl.id);
+  const latest = latestProgress(pointsOf(projectId));
+  const problems: string[] = [], save: MProgress[] = [], seen = new Set<string>();
+  for (const r of b.rows) {
+    const x = acts.find((y) => y.code === r.activityCode);
+    if (!x) { problems.push(`${r.activityCode}: not an activity in the current baseline.`); continue; }
+    if (seen.has(x.code)) { problems.push(`${x.code}: listed twice.`); continue; }
+    seen.add(x.code);
+    const pct = D(r.pctComplete);
+    const row = { pctComplete: pct.toFixed(2), actualStart: r.actualStart || null, actualFinish: r.actualFinish || null };
+    const prev = latest.get(x.code);
+    if (prev && D(prev.pctComplete).eq(pct) && (prev.actualStart ?? null) === row.actualStart && (prev.actualFinish ?? null) === row.actualFinish) continue;
+    if (!prev && pct.isZero() && !row.actualStart) continue;
+    const problem = progressProblem(row, b.asOfDate);
+    if (problem) { problems.push(`${x.code} ${x.name}: ${problem}`); continue; }
+    if (prev && b.asOfDate < prev.asOfDate) { problems.push(`${x.code}: progress dated ${prev.asOfDate} is already recorded; use that date or later.`); continue; }
+    if (prev && pct.lt(prev.pctComplete) && !r.remark?.trim()) { problems.push(`${x.code}: % complete is lower than last time (${D(prev.pctComplete).toString()}%). Add a remark explaining why.`); continue; }
+    save.push({ projectId, activityCode: x.code, asOfDate: b.asOfDate, ...row, remark: r.remark?.trim() || null, recordedBy: a.user.id, recordedAt: recAt() });
+  }
+  if (problems.length) return { ok: false, saved: 0, unchanged: b.rows.length - save.length - problems.length, problems };
+  cx.progress.push(...save);
+  if (save.length) audit(a, "programme.progress_recorded", "project", projectId, projectId, { activities: save.length });
+  return { ok: true, saved: save.length, unchanged: b.rows.length - save.length, problems };
+}
+route("POST", "/api/projects/:projectId/programme/progress", (a, p, _q, b) => recordProgressM(a, p.projectId, b));
+route("POST", "/api/projects/:projectId/programme/progress/import", (a, p, _q, b) => {
+  const parsed = parseProgressCsv(b.csv);
+  if (parsed.problems.length) return { ok: false, saved: 0, unchanged: 0, problems: parsed.problems };
+  return recordProgressM(a, p.projectId, { asOfDate: b.asOfDate, rows: parsed.rows });
+});
+route("GET", "/api/projects/:projectId/programme/activities/:code/history", (a, p) => {
+  need(a, "project.view"); needProject(a, p.projectId, "Project");
+  return pointsOf(p.projectId).filter((x) => x.activityCode === p.code).sort((x, y) => y.asOfDate.localeCompare(x.asOfDate) || y.recordedAt.localeCompare(x.recordedAt))
+    .map((x) => ({ asOfDate: x.asOfDate, pctComplete: x.pctComplete, actualStart: x.actualStart, actualFinish: x.actualFinish, remark: x.remark, byName: userName(x.recordedBy) }));
+});
+/** For the owner's overview. */
+function programmeSnapM(projectId: string) {
+  const bl = currentBaselineM(projectId); if (!bl) return null;
+  const acts = cx.activities.filter((x) => x.baselineId === bl.id), points = pointsOf(projectId), latest = latestProgress(points), t = today();
+  const planned = plannedProjectPct(acts, t), actual = actualProjectPct(acts, latest), sv = scheduleVarianceDays(acts, actual, t);
+  return { baselineName: bl.name, plannedPct: planned.toFixed(2), actualPct: actual.toFixed(2), daysAheadBehind: sv, forecastFinish: sv !== null && sv < 0 ? addDays(bl.plannedFinish, -sv) : bl.plannedFinish,
+    plannedFinish: bl.plannedFinish, lastUpdate: points.reduce<string | null>((m, x) => (!m || x.asOfDate > m ? x.asOfDate : m), null),
+    lateActivities: acts.filter((x) => { const s = activityStatus(x, latest.get(x.code), t); return s.lateFinish || s.lateStart; }).length };
+}
+function contractSnapM(projectId: string) {
+  const c = contractOf(projectId); if (!c) return null;
+  const s = boqSummaryM(c);
+  const st = cx.securities.filter((x) => x.contractId === c.id && x.status === "active").map((x) => securityStateM(x).state);
+  return { contractValue: c.contractValue, boqStatus: c.boqStatus, workDone: s.workDone, workDonePct: s.workDonePct, expiring: st.filter((x) => x === "expiring").length, expired: st.filter((x) => x === "expired").length };
+}
+
 export function handle(method: string, url: string, body: unknown): { status: number; body: unknown } {
   const u = new URL(url, "http://preview.local");
   try {
@@ -1334,7 +1674,8 @@ export function seed() {
   const seB = mkUser("engineer.villa@demo.edge.test", "Demo Site Engineer Villa", "Site Engineer", ["site_engineer"], [p102.id]);
   const proc = mkUser("procurement@demo.edge.test", "Demo Procurement Officer", "Procurement Officer", ["procurement_officer"]);
   const store = mkUser("stores@demo.edge.test", "Demo Central Storekeeper", "Storekeeper", ["storekeeper"], [p101.id, p102.id, p103.id]);
-  mkUser("qs@demo.edge.test", "Demo Quantity Surveyor", "Quantity Surveyor", ["quantity_surveyor"], [p101.id, p102.id]);
+  const qs = mkUser("qs@demo.edge.test", "Demo Quantity Surveyor", "Quantity Surveyor", ["quantity_surveyor"], [p101.id, p102.id]);
+  const planner = mkUser("planner@demo.edge.test", "Demo Planning Engineer", "Planning Engineer", ["planning_engineer"], [p101.id, p102.id]);
   mkUser("accounts@demo.edge.test", "Demo Accountant", "Accountant", ["accountant"]);
   mkUser("viewer@demo.edge.test", "Demo Management Viewer", "Management", ["management_viewer"]);
   const dc = mkUser("dc@demo.edge.test", "Demo Document Controller", "Document Controller", ["document_controller"], [p101.id, p102.id, p103.id]);
@@ -1481,4 +1822,26 @@ export function seed() {
   rfiDemo(seB, p102.id, { discipline: "architectural", subject: "Pool coping stone fixing method", question: "Confirm whether the coping stones are to be mechanically fixed or bedded only.", location: "Pool", drawingRevisionId: pool["1"], blockedActivity: "Pool coping installation" }, { issue: -10 });
   rfiDemo(seB, p102.id, { discipline: "landscape", subject: "Irrigation sleeve depth under the driveway", question: "Confirm the sleeve depth below the interlock paving.", location: "Driveway" }, { issue: -20, answer: [-16, "600 mm minimum to top of sleeve."], close: [-15, "Installed at 600 mm and inspected."] });
   rfiDemo(pmB, p103.id, { discipline: "electrical", subject: "Cable tray support spacing", question: "Specification says 1.5 m, the tray manufacturer allows 2.0 m. Which applies?", location: "Zone B", drawingRevisionId: ele["0"], originatorCompanyId: mep.id }, { issue: -2 });
+
+  // Contracts, BOQs, budget, programme baselines and site progress (same data as the server demo).
+  const d = (n: number) => addDays(t, n);
+  const projectOf = { "DEMO-101": p101.id, "DEMO-102": p102.id };
+  for (const c of DEMO_CONTRACTS) {
+    const pid = projectOf[c.project], who = c.project === "DEMO-101" ? qs : pmB, x = c.terms;
+    saveContractM(who, pid, { contractNo: x.contractNo, title: x.title, form: x.form, signedDate: d(x.signed), commencementDate: d(x.commencement), completionDate: d(x.completion), contractValue: x.contractValue,
+      retentionPct: x.retentionPct, retentionLimitPct: x.retentionLimitPct ?? null, advancePct: x.advancePct, ldPerDay: x.ldPerDay, ldCapPct: x.ldCapPct, defectsLiabilityMonths: x.defectsLiabilityMonths,
+      paymentTermsDays: x.paymentTermsDays, notes: x.notes ?? null });
+    for (const sc of c.securities) addSecurityM(who, pid, { kind: sc.kind, reference: sc.reference, issuer: sc.issuer, amount: sc.amount ?? null, issueDate: d(sc.issued), expiryDate: d(sc.expires) });
+    importBoqM(who, pid, { csv: demoCsv(c.boq), fileName: c.boqFile });
+    if (!c.confirm) continue;
+    confirmBoqM(who, pid, null);
+    const cid = contractOf(pid)!.id;
+    for (const m of c.measurements) measureM(se, pid, { asOfDate: d(m.at), rows: Object.entries(m.qty).map(([ref, q]) => ({ boqLineId: cx.lines.find((l) => l.contractId === cid && l.ref === ref)!.id, qtyToDate: q })) });
+    if (c.budget.length) setBudgetM(who, pid, c.budget.map((b) => ({ costCodeId: db.costCodes.find((k) => k.code === b.costCode)!.id, amount: b.amount, note: b.note ?? null })));
+  }
+  for (const pg of DEMO_PROGRAMMES) {
+    const pid = projectOf[pg.project];
+    importBaselineM(pg.project === "DEMO-101" ? planner : pmB, pid, { format: "csv", text: baselineCsv(pg, d), fileName: pg.fileName, name: "Baseline rev 0 (demo)" });
+    for (const snap of progressSnapshots(pg, d)) recordProgressM(pg.project === "DEMO-101" ? se : seB, pid, snap);
+  }
 }

@@ -1,4 +1,5 @@
 /** Contract register, contract BOQ, site measurements, cost budget, P6 programme baseline and activity progress. */
+import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import type { DB } from "../server/db/client.js";
@@ -113,6 +114,15 @@ describe("reading files", () => {
     const p = parseProgressCsv("Activity ID,Activity % Complete,Actual Start,Actual Finish,Remarks\nA1,40%,02/09/2026,,slow\nA2,140,,,\n");
     expect(p.rows[0]).toEqual({ activityCode: "A1", pctComplete: "40", actualStart: "2026-09-02", actualFinish: null, remark: "slow" });
     expect(p.problems[0]).toMatch(/Row 3 \(A2\)/);
+  });
+});
+
+describe("example files given to EDGE's team", () => {
+  it("deploy/examples/*.csv read without problems", () => {
+    const read = (f: string) => readFileSync(`deploy/examples/${f}`, "utf8");
+    expect(parseBoqCsv(read("boq-example.csv"))).toMatchObject({ problems: [], total: "18500000.00" });
+    expect(parseProgrammeCsv(read("programme-example.csv")).problems).toEqual([]);
+    expect(parseProgressCsv(read("progress-example.csv"))).toMatchObject({ problems: [], rows: expect.arrayContaining([expect.objectContaining({ activityCode: "A1110", actualStart: "2026-10-02" })]) });
   });
 });
 

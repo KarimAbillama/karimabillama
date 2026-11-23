@@ -53,6 +53,7 @@ run("npm", ["install", "--omit=dev", "--no-package-lock", "--no-audit", "--no-fu
 
 // 4. Templates for loading EDGE's own data
 cpSync(path.join(root, "deploy/templates"), path.join(out, "templates"), { recursive: true });
+cpSync(path.join(root, "deploy/examples"), path.join(out, "examples"), { recursive: true });
 mkdirSync(path.join(out, "tools"));
 cpSync(path.join(root, "scripts/verify-restore.sql"), path.join(out, "tools/verify-restore.sql"));
 

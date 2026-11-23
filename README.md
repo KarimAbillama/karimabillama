@@ -24,7 +24,24 @@ once and reused: a project, supplier, item or cost code is one record shared by 
   RFIs warn when they point to a superseded revision.
 - **Daily site reports from a phone.** People per trade and subcontractor, work done, what held work up
   and why, inspections, safety. The PM accepts or returns them; missing reports are flagged.
-- **Weekly progress.** Planned vs actual %, forecast finish and risks, entered by the PM.
+- **Programme and progress (from Primavera P6).** The planner imports the baseline from P6 (XER file or
+  an Excel activity list). Site engineers record % complete, actual start and actual finish per activity
+  in the system instead of a separate Excel. The page shows planned vs actual %, days ahead or behind,
+  forecast finish against the contract date, an S-curve, late and behind activities, and 2- and 6-week
+  look-aheads. The progress sheet exports to Excel for the planner to update P6 and can be imported back.
+  A revised baseline (for example after an extension of time) keeps all recorded progress.
+- **Weekly progress.** For projects without a P6 baseline: planned vs actual %, forecast finish and risks, entered by the PM.
+
+**Commercial**
+
+- **Contract register.** Terms as signed: form of contract, dates, value, retention and its limit, advance,
+  delay damages and cap, defects liability, payment days. Bonds, guarantees and insurances with expiry
+  warnings on the contract page and the owner's overview.
+- **Contract BOQ.** Imported from Excel (saved as CSV) with every problem listed by row; a draft can be
+  re-imported, and once confirmed the BOQ is locked (changes will go through variations).
+- **Quantities done on site.** Site engineers record the quantity done to date on each BOQ item (they do
+  not see rates); the QS and management see the value of work done by item, bill and project.
+- **Cost budget** per cost code against purchase commitments.
 
 **Materials (procurement and stock)**
 
